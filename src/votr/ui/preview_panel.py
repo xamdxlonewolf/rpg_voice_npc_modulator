@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from votr.neural import NEURAL_ENGINE_ID
 from votr.preview import (
     MAX_TAKE_SECONDS,
     input_devices,
@@ -158,17 +159,17 @@ class PreviewPanel(QWidget):
         if take is None:
             take = load_sample_take()
             self.session.take = take
+        engine = self.session.engine
         if voice_params is not None:
-            saved = self.session.engine.params()
-            self.session.engine.set_params(self.session.full_params(voice_params))
+            saved = engine.params()
+            engine.set_params(self.session.full_params(voice_params))
         else:
             saved = None
             self.session.apply_draft_to_engine()
-        rendered = (
-            take.copy() if self._compare_dry else render_take(self.session.engine, take)
-        )
+            engine = self.session.preview_engine()
+        rendered = take.copy() if self._compare_dry else render_take(engine, take)
         if saved is not None:
-            self.session.engine.set_params(saved)
+            engine.set_params(saved)
         played = play_on_speakers(rendered)
         if not played and force:
             self.status.setText(
@@ -178,6 +179,19 @@ class PreviewPanel(QWidget):
     def preview_other_voice(self, voice_id: str) -> None:
         voice = self.session.voice_by_id(voice_id)
         if voice is None:
+            return
+        if voice.engine_id == NEURAL_ENGINE_ID:
+            engine = self.session.ensure_neural_engine()
+            if engine is None:
+                self.status.setText("Neural Voice — the Neural Engine is not ready.")
+                return
+            engine.set_params(voice.params)
+            take = (
+                self.session.take
+                if self.session.take is not None
+                else load_sample_take()
+            )
+            play_on_speakers(render_take(engine, take))
             return
         self.render_and_play(force=True, voice_params=voice.params)
 

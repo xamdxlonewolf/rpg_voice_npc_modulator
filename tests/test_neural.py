@@ -4,19 +4,63 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
+import numpy as np
 import pytest
 
 from votr import neural
+from votr.engine import Engine
 from votr.neural import (
     MIN_VRAM_MIB,
     GpuInfo,
     NeuralDesigner,
+    create_neural_engine,
     detect_nvidia_gpu,
     neural_status,
     parse_nvidia_smi,
+    probe_runtime,
 )
-from votr.session import INSTALLED_ENGINE_IDS
+from votr.neural_engine import NEURAL_ENGINE_ID, REFERENCE_CLIP_KEY, NeuralEngine
+from votr.neural_pack import CONVERSION_PACK, VOICE_DESIGN_PACK, pack_root
+from votr.session import INSTALLED_ENGINE_IDS, Session
+from votr.spikes.pitch_core import stretch_available
+from votr.voice import DSP_ENGINE_ID
+from votr.voicedesign import design_voice
+from votr.wavutil import write_wav
+
+BIG_GPU = GpuInfo("NVIDIA GeForce RTX 3060", 12288)
+
+
+def _installed_pack(root: Path, pack) -> None:
+    """Fake a downloaded pack: every file present at its declared size."""
+    for item in pack.files:
+        if item.unzip_to:
+            (root / item.unzip_to).mkdir(parents=True, exist_ok=True)
+            (root / item.unzip_to / "README.md").write_text("x")
+            continue
+        path = root / item.relpath
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("wb") as handle:
+            handle.truncate(item.size or 0)
+
+
+class FakeConverter:
+    sample_rate = 16000
+
+    def __init__(self) -> None:
+        self.reference: tuple[int, int] | None = None
+        self.calls = 0
+
+    def set_reference(self, clip: np.ndarray, sample_rate: int) -> None:
+        self.reference = (clip.size, sample_rate)
+
+    def convert_window(self, window: np.ndarray) -> np.ndarray:
+        self.calls += 1
+        return -window
+
+
+# --- GPU detection -----------------------------------------------------------
 
 
 def test_parse_nvidia_smi_csv() -> None:
@@ -43,8 +87,7 @@ def test_detect_parses_a_fake_driver(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     monkeypatch.setattr(neural.subprocess, "run", fake_run)
-    gpu = detect_nvidia_gpu()
-    assert gpu == GpuInfo("NVIDIA RTX A4000", 16376)
+    assert detect_nvidia_gpu() == GpuInfo("NVIDIA RTX A4000", 16376)
 
 
 def test_detect_tolerates_a_broken_driver(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -57,22 +100,190 @@ def test_detect_tolerates_a_broken_driver(monkeypatch: pytest.MonkeyPatch) -> No
     assert detect_nvidia_gpu() is None
 
 
-def test_status_is_honest_about_hardware_and_accent() -> None:
+# --- runtime gate ------------------------------------------------------------
+
+
+def test_probe_on_a_machine_without_gpu_is_off_and_skips_torch(tmp_path: Path) -> None:
+    calls = []
+
+    def torch_state():
+        calls.append(1)
+        return True, True, "should not be asked"
+
+    runtime = probe_runtime(tmp_path, detect=lambda: None, torch_state=torch_state)
+    assert runtime.gpu is None
+    assert not runtime.ready and not runtime.design_ready
+    assert runtime.reason == "no NVIDIA GPU detected"
+    assert calls == []
+    assert runtime.root == pack_root(tmp_path)
+
+
+def test_probe_reasons_in_order(tmp_path: Path) -> None:
+    small = probe_runtime(tmp_path, gpu=GpuInfo("GTX 1050", 2048))
+    assert not small.ready and str(MIN_VRAM_MIB) in small.reason
+    no_torch = probe_runtime(
+        tmp_path, gpu=BIG_GPU, torch_state=lambda: (False, False, "PyTorch missing")
+    )
+    assert not no_torch.ready and no_torch.reason == "PyTorch missing"
+    no_pack = probe_runtime(
+        tmp_path, gpu=BIG_GPU, torch_state=lambda: (True, True, "PyTorch 2.5 with CUDA")
+    )
+    assert not no_pack.ready and "not downloaded" in no_pack.reason
+    _installed_pack(pack_root(tmp_path), CONVERSION_PACK)
+    ready = probe_runtime(
+        tmp_path, gpu=BIG_GPU, torch_state=lambda: (True, True, "PyTorch 2.5 with CUDA")
+    )
+    assert ready.ready and ready.reason == ""
+    assert not ready.design_ready
+    _installed_pack(pack_root(tmp_path), VOICE_DESIGN_PACK)
+    assert probe_runtime(
+        tmp_path, gpu=BIG_GPU, torch_state=lambda: (True, True, "ok")
+    ).design_ready
+
+
+def test_create_engine_returns_none_when_not_ready_or_backend_fails(
+    tmp_path: Path,
+) -> None:
+    off = probe_runtime(tmp_path, detect=lambda: None)
+    assert create_neural_engine(off) is None
+    _installed_pack(pack_root(tmp_path), CONVERSION_PACK)
+    ready = probe_runtime(tmp_path, gpu=BIG_GPU, torch_state=lambda: (True, True, "ok"))
+
+    def broken(_root):
+        raise RuntimeError("no such module")
+
+    assert create_neural_engine(ready, converter_factory=broken) is None
+    engine = create_neural_engine(
+        ready, converter_factory=lambda _root: FakeConverter()
+    )
+    assert isinstance(engine, NeuralEngine)
+    assert isinstance(engine, Engine)
+    assert engine.engine_id == NEURAL_ENGINE_ID
+    assert engine.capabilities().changes_identity and engine.capabilities().requires_gpu
+
+
+def test_status_is_honest_about_hardware_and_accent(tmp_path: Path) -> None:
     none = neural_status(None)
     assert "No NVIDIA GPU" in none
-    assert "not installed" in none
+    assert "opt-in download" in none
     assert "accent" in none.lower()
     small = neural_status(GpuInfo("GTX 1050", 2048))
     assert str(MIN_VRAM_MIB) in small
-    big = neural_status(GpuInfo("RTX 3060", 12288))
-    assert "enough" in big
-    for text in (none, small, big):
-        assert "download button" in text
+    runtime = probe_runtime(
+        tmp_path, gpu=BIG_GPU, torch_state=lambda: (False, False, "PyTorch missing")
+    )
+    with_runtime = neural_status(BIG_GPU, runtime)
+    assert "enough" in with_runtime
+    assert "not downloaded" in with_runtime
+    assert "PyTorch missing" in with_runtime
+    assert "Neural Engine is off" in with_runtime
 
 
-def test_neural_designer_reports_unavailable_and_engine_is_not_installed() -> None:
+# --- designer fallback ----------------------------------------------------
+
+
+def test_neural_designer_unavailable_and_design_falls_back(tmp_path: Path) -> None:
     ok, reason = NeuralDesigner().available()
     assert not ok and "not installed" in reason
-    ok, reason = NeuralDesigner(GpuInfo("RTX 3060", 12288), installed=True).available()
-    assert not ok and "no model" in reason
-    assert neural.NEURAL_ENGINE_ID not in INSTALLED_ENGINE_IDS
+    off = probe_runtime(tmp_path, detect=lambda: None)
+    ok, reason = NeuralDesigner(off).available()
+    assert not ok and "no NVIDIA GPU" in reason
+    with pytest.raises(RuntimeError):
+        NeuralDesigner(off).design("anything")
+    design = design_voice("a whispering assassin", runtime=off)
+    assert design.designer == "lexicon"
+    assert design.engine_id == DSP_ENGINE_ID
+
+
+def test_neural_designer_makes_a_reference_clip_when_ready(tmp_path: Path) -> None:
+    root = pack_root(tmp_path)
+    _installed_pack(root, CONVERSION_PACK)
+    _installed_pack(root, VOICE_DESIGN_PACK)
+    runtime = probe_runtime(
+        tmp_path, gpu=BIG_GPU, torch_state=lambda: (True, True, "ok")
+    )
+
+    class FakeMaker:
+        def make_clip(self, instruct: str, text: str = "") -> tuple[np.ndarray, int]:
+            t = np.arange(24000) / 24000
+            return (0.2 * np.sin(2 * np.pi * 200 * t)).astype(np.float32), 24000
+
+    designer = NeuralDesigner(runtime, clip_maker_factory=lambda _root: FakeMaker())
+    assert designer.available() == (True, "")
+    design = designer.design("a weary old ferryman with a voice like gravel")
+    assert design.engine_id == NEURAL_ENGINE_ID
+    clip = Path(design.params[REFERENCE_CLIP_KEY])
+    assert clip.is_file() and clip.parent == root / "clips"
+    assert design.params["mix"] == 1.0
+    assert design.name == "Weary Old Ferryman"
+    assert any("Accent is still yours" in note for note in design.notes)
+
+
+def test_design_voice_falls_back_when_the_neural_backend_blows_up(
+    tmp_path: Path,
+) -> None:
+    root = pack_root(tmp_path)
+    _installed_pack(root, CONVERSION_PACK)
+    _installed_pack(root, VOICE_DESIGN_PACK)
+    runtime = probe_runtime(
+        tmp_path, gpu=BIG_GPU, torch_state=lambda: (True, True, "ok")
+    )
+    # Packs "present" but no torch/qwen_tts in this Python: backend import fails.
+    design = design_voice("a whispering assassin", runtime=runtime)
+    assert design.designer == "lexicon"
+    assert design.engine_id == DSP_ENGINE_ID
+    assert "whisper" in design.tone_tags
+    assert any("neural designer failed" in note for note in design.notes)
+
+
+# --- Session registration -------------------------------------------------
+
+
+@pytest.mark.skipif(not stretch_available(), reason="DSP Engine needs python-stretch")
+def test_session_without_gpu_keeps_neural_voices_disabled(tmp_path: Path) -> None:
+    session = Session(tmp_path)
+    assert NEURAL_ENGINE_ID not in INSTALLED_ENGINE_IDS
+    assert session.neural.ready is False
+    assert session.engine_installed(DSP_ENGINE_ID)
+    assert not session.engine_installed(NEURAL_ENGINE_ID)
+    assert session.ensure_neural_engine() is None
+    session.draft.engine_id = NEURAL_ENGINE_ID
+    assert session.preview_engine() is session.engine
+    session.refresh_neural()
+    assert session.neural_engine is None
+
+
+@pytest.mark.skipif(not stretch_available(), reason="DSP Engine needs python-stretch")
+def test_session_uses_neural_engine_for_neural_drafts_when_ready(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = Session(tmp_path)
+    root = pack_root(tmp_path)
+    _installed_pack(root, CONVERSION_PACK)
+    session.neural = probe_runtime(
+        tmp_path, gpu=BIG_GPU, torch_state=lambda: (True, True, "ok")
+    )
+    fake = FakeConverter()
+    monkeypatch.setattr(
+        neural,
+        "create_neural_engine",
+        lambda runtime, block_size=512, converter_factory=None: NeuralEngine(
+            fake, block_size=block_size
+        ),
+    )
+    import votr.session as session_module
+
+    monkeypatch.setattr(
+        session_module, "create_neural_engine", neural.create_neural_engine
+    )
+    assert session.engine_installed(NEURAL_ENGINE_ID)
+    clip = tmp_path / "ref.wav"
+    write_wav(clip, (0.1 * np.sin(np.arange(48000) / 20.0)).astype(np.float32), 48000)
+    session.draft.engine_id = NEURAL_ENGINE_ID
+    session.draft.params = {REFERENCE_CLIP_KEY: str(clip), "mix": 1.0}
+    engine = session.preview_engine()
+    assert isinstance(engine, NeuralEngine)
+    assert engine.has_reference and fake.reference == (48000, 48000)
+    assert engine.block_size == session.engine.block_size
+    session.draft.engine_id = DSP_ENGINE_ID
+    assert session.preview_engine() is session.engine
