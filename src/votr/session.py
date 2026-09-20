@@ -24,6 +24,7 @@ class Session:
         self.warnings = list(self.store.warnings)
         self.draft = Voice.new()
         self.active_id: str | None = None
+        self.roleplay_on = False
         self._saved = self.draft.to_dict()
 
     def is_dirty(self) -> bool:
@@ -66,13 +67,22 @@ class Session:
         self.draft = self.draft.duplicate()
         return self.save_draft()
 
-    def delete_draft(self) -> None:
-        voice_id = self.draft.id
+    def delete_voice(self, voice_id: str) -> None:
         self.store.delete(voice_id)
         self.voices = [voice for voice in self.voices if voice.id != voice_id]
         if self.active_id == voice_id:
             self.active_id = self.voices[0].id if self.voices else None
-        self.edit_new()
+        if self.draft.id == voice_id:
+            self.edit_new()
+
+    def delete_draft(self) -> None:
+        self.delete_voice(self.draft.id)
+
+    def duplicate_voice(self, voice: Voice) -> Voice:
+        copy = voice.duplicate()
+        self.store.save(copy)
+        self.replace_voice(copy)
+        return copy
 
     def edit(self, voice: Voice) -> None:
         self.draft = Voice.from_dict(voice.to_dict())
@@ -92,7 +102,8 @@ class Session:
         voice.touch(used=True)
         self.store.save(voice)
         self.active_id = voice.id
-        self.engine.set_params(voice.params)
+        fade = 30.0 if self.roleplay_on else 0.0
+        self.engine.set_params(voice.params, crossfade_ms=fade)
         return voice
 
     def active_voice(self) -> Voice | None:

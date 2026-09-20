@@ -88,6 +88,9 @@ class DspEngine(BaseEngine):
         self._stretch_in = np.zeros((1, block_size), dtype=np.float32)
         self._live_out = np.zeros(block_size, dtype=np.float32)
         self._rng = np.random.default_rng()
+        self._fade_left = 0
+        self._fade_total = 0
+        self._fade_prev: np.ndarray | None = None
         self._init_effects()
         self._rebuild_shifter()
 
@@ -132,7 +135,7 @@ class DspEngine(BaseEngine):
             return int(self._shifter.get_start_delay())
         return int(self._shifter.outputLatency())
 
-    def set_params(self, params: dict[str, Any]) -> None:
+    def set_params(self, params: dict[str, Any], *, crossfade_ms: float = 0.0) -> None:
         changed = False
         for key, value in params.items():
             if key not in _DEFAULTS:
@@ -148,6 +151,9 @@ class DspEngine(BaseEngine):
             self._reverb.dry_level = max(0.2, 1.0 - 0.45 * room)
             distance = float(self._params["distance"])
             self._lowpass.cutoff_frequency_hz = 12_000 - distance * 10_800
+            if crossfade_ms > 0:
+                self._fade_total = int(self.sample_rate * crossfade_ms / 1000.0)
+                self._fade_left = self._fade_total
 
     def apply_macro(self, tag: str) -> None:
         macro = self._macro_defs.get(tag)
@@ -190,7 +196,24 @@ class DspEngine(BaseEngine):
                 work, self.sample_rate, buffer_size=self.block_size, reset=False
             )
         )
+        limited = self._crossfade(limited)
         return np.ascontiguousarray(limited, dtype=np.float32)
+
+    def _crossfade(self, block: np.ndarray) -> np.ndarray:
+        previous = self._fade_prev
+        self._fade_prev = block.copy()
+        if self._fade_left <= 0 or previous is None or self._fade_total <= 0:
+            return block
+        done = self._fade_total - self._fade_left
+        ramp = np.linspace(
+            done / self._fade_total,
+            min(1.0, (done + block.size) / self._fade_total),
+            block.size,
+            dtype=np.float32,
+        )
+        mixed = previous * (1.0 - ramp) + block * ramp
+        self._fade_left = max(0, self._fade_left - block.size)
+        return mixed.astype(np.float32)
 
     def _apply_gate(self, work: np.ndarray) -> np.ndarray:
         amount = float(self._params["gate"])
