@@ -5,6 +5,11 @@ Windows installer artifacts are attached to GitHub Releases on `v*` tags.
 
 ## Unreleased
 
+- Neural: `pip install -e ".[neural]"` extra with the runtime X-VC and Qwen3-TTS
+  actually need (incl. wandb/tensorboard/matplotlib/audiotools that X-VC imports
+  at load); the adapter now reports the real import error and a pip hint instead
+  of hydra's "Error locating target"; the editor shows why the Engine failed.
+
 - E7 GPU slice: a real `NeuralEngine` (X-VC zero-shot voice conversion) behind the
   Engine seam with streaming windows, latency-matched mix and Preview == live;
   opt-in model pack download in Settings → Neural (sizes, licences incl. the

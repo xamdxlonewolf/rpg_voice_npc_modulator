@@ -115,24 +115,48 @@ own adapter.
 | Live Irish/British accent on your own speech | No | No — and we will not pretend |
 | Settings → Neural | Honest status, buttons disabled | Size + licences + download/cancel/resume |
 
+## Installing the runtime (learned on Michael's Windows box, Python 3.13)
+
+Run from source, not the installer. In the repo folder:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\activate
+pip install -e ".[dev]"
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
+pip install -e ".[neural]"
+python -c "import torch, transformers; print(torch.__version__, torch.cuda.is_available(), transformers.__version__)"
+```
+
+The last line must print a `+cu1xx` torch, `True`, and transformers ≥ 4.46. Use `cu126`
+if `nvidia-smi` reports CUDA 12.6. Then `python -m votr` → Settings → Neural → tick the
+licence acknowledgement → Download.
+
+What we learned the hard way:
+
+- X-VC pins `torch==2.5.1` and `transformers==4.44.1`. Neither installs on Python 3.13
+  (no torch wheels; `transformers` 4.44 drags an old `tokenizers` that tries to compile
+  Rust and PyO3 refuses). torch 2.9 + transformers ≥ 4.46 install fine; whether X-VC's
+  inference is happy on them is the next thing Michael's box will tell us.
+- X-VC's `utils/log.py` imports `wandb`, `tensorboard` and `matplotlib` at load time and
+  `model.py` imports `audiotools` (descript-audiotools); missing any of them surfaces as
+  hydra's opaque *"Error locating target 'models.codec.sac.model.XVC'"*. The `neural`
+  extra now includes them, and `XvcConverter` pre-imports the model module so the real
+  error and a `pip install` hint appear in the editor and the log.
+- `SoX could not be found` is a warning from descript-audiotools' optional SoX path; it
+  is not needed. `flash-attn is not installed` is Qwen3-TTS choosing the slower
+  attention; also fine.
+- Qwen3-TTS VoiceDesign generated a clip on the first try (torch 2.9, transformers ≥
+  4.46, `qwen-tts` 0.1.1).
+
 ## Remaining blockers for Michael's box
 
-1. **Python runtime with CUDA PyTorch.** The packs are weights; the code needs
-   `torch==2.5.1` (CUDA build from the PyTorch index) plus X-VC's inference deps
-   (`hydra-core`, `omegaconf`, `einops`, `x-transformers`, `transformers==4.44.1`,
-   `librosa`, `soundfile`, `soxr`, `torchaudio`, `einx`, `descript-audiotools`) and,
-   for voice design, `qwen-tts`. None of this is in the installer; run from source:
-   `pip install -e ".[dev]"` then the neural packages by hand. `qwen-tts` may need a
-   newer `transformers` than X-VC pins — expect to try one, then the other, or two
-   environments. Unverified.
-2. **First real run of the adapters.** `XvcConverter` and `QwenVoiceDesign` follow the
-   upstream sources but have never executed on a GPU here. Budget for small API fixes in
-   `votr/neural_backends.py` (and possibly the yaml keys the runtime config rewrites).
-3. **Windows friendliness of X-VC's stack.** Its `requirements.txt` includes
-   `deepspeed`, which is training-only and painful on Windows; inference should not
-   import it, but that is untested.
-4. **Roleplay Mode** still uses the DSP Engine for Neural Voices (deliberately not
-   touched). Wiring `RoleplayPath` to `Session.neural_engine` plus the latency warning
-   (S7.4) is the next slice.
-5. **Quality and latency numbers** are the publishers' (X-VC paper: ~240 ms model
-   latency; community client: 290–490 ms end-to-end). We have measured nothing.
+1. **First successful X-VC load.** Runtime is now installable; the next report will show
+   whether `models.codec.sac.model` imports and `load_xvc` runs on torch 2.9 /
+   transformers ≥ 4.46 with the rewritten yaml. Fixes belong in
+   `votr/neural_backends.py`.
+2. **Roleplay Mode** still uses the DSP Engine for Neural Voices (S7.4 next slice).
+3. **No reference-clip picker** in the editor; a Neural Voice is made by "Design from
+   Tone Hints" (with the VoiceDesign pack) or by editing the Voice JSON.
+4. **Installer** does not carry the runtime; source checkout required.
+5. **Quality and latency numbers** are the publishers'; nothing measured here yet.

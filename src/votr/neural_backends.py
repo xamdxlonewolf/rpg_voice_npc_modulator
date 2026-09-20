@@ -15,6 +15,8 @@ first run on a GPU box to surface small API mismatches — keep changes here.
 
 from __future__ import annotations
 
+import importlib
+import os
 import sys
 from pathlib import Path
 from typing import Any, Protocol
@@ -24,6 +26,28 @@ import numpy as np
 from votr.neural_pack import CONVERSION_PACK, VOICE_DESIGN_PACK, pack_status
 
 XVC_LATENT_HOP = 1280
+# X-VC's inference path imports these at module load (utils/log.py pulls in
+# wandb, tensorboard and matplotlib; model.py needs audiotools). Listed so a
+# missing one becomes a one-line pip hint instead of hydra's "Error locating
+# target". Install all with: pip install -e ".[neural]" (after CUDA torch).
+XVC_RUNTIME_MODULES: tuple[tuple[str, str], ...] = (
+    ("hydra", "hydra-core"),
+    ("omegaconf", "omegaconf"),
+    ("einops", "einops"),
+    ("einx", "einx"),
+    ("x_transformers", "x-transformers"),
+    ("transformers", "transformers"),
+    ("librosa", "librosa"),
+    ("soundfile", "soundfile"),
+    ("soxr", "soxr"),
+    ("torchaudio", "torchaudio"),
+    ("audiotools", "descript-audiotools"),
+    ("scipy", "scipy"),
+    ("matplotlib", "matplotlib"),
+    ("tensorboard", "tensorboard"),
+    ("wandb", "wandb"),
+    ("tqdm", "tqdm"),
+)
 DESIGN_SAMPLE_TEXT = (
     "Gather close, travellers, and listen well: the road ahead winds through the "
     "old forest, and not everything that watches from the trees is a friend."
@@ -59,6 +83,8 @@ class XvcConverter:
         source = self._root / "xvc-src"
         if str(source) not in sys.path:
             sys.path.insert(0, str(source))
+        os.environ.setdefault("HYDRA_FULL_ERROR", "1")
+        check_xvc_runtime(source)
         import torch
         from bins import infer_utils  # type: ignore[import-not-found]
 
@@ -113,6 +139,38 @@ class XvcConverter:
         )
         audio = out.squeeze().detach().float().cpu().numpy()
         return np.asarray(audio, dtype=np.float32)[: window.size]
+
+
+def missing_runtime_packages() -> list[str]:
+    """pip names of X-VC runtime packages that are not importable here."""
+    missing = []
+    for module, pip_name in XVC_RUNTIME_MODULES:
+        if importlib.util.find_spec(module) is None:
+            missing.append(pip_name)
+    return missing
+
+
+def check_xvc_runtime(source: Path) -> None:
+    """Import X-VC's model module ourselves so the *real* error surfaces."""
+    missing = missing_runtime_packages()
+    if missing:
+        raise RuntimeError(
+            "X-VC needs Python packages that are not installed: "
+            + " ".join(missing)
+            + '. Run: pip install -e ".[neural]" (with CUDA PyTorch already in place).'
+        )
+    if not (source / "models" / "codec" / "sac" / "model.py").is_file():
+        raise RuntimeError(
+            f"X-VC source not found under {source}; re-download the conversion pack."
+        )
+    try:
+        importlib.import_module("models.codec.sac.model")
+    except Exception as exc:
+        raise RuntimeError(
+            f"X-VC source failed to import ({type(exc).__name__}: {exc}). "
+            "This is usually a version mismatch with torch or transformers; "
+            "see docs/neural-voice.md."
+        ) from exc
 
 
 class QwenVoiceDesign:

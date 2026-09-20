@@ -21,7 +21,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from votr.neural_engine import NEURAL_ENGINE_ID, REFERENCE_CLIP_KEY, NeuralEngine
+from votr.neural_engine import (
+    NEURAL_ENGINE_ID,
+    REFERENCE_CLIP_KEY,
+    NeuralEngine,
+    NeuralUnavailable,
+)
 from votr.neural_pack import (
     CONVERSION_PACK,
     VOICE_DESIGN_PACK,
@@ -36,6 +41,7 @@ __all__ = [
     "GpuInfo",
     "NeuralDesigner",
     "NeuralRuntime",
+    "build_neural_engine",
     "create_neural_engine",
     "detect_nvidia_gpu",
     "neural_status",
@@ -187,6 +193,24 @@ def _default_converter(root: Path) -> Any:
     return XvcConverter(root)
 
 
+def build_neural_engine(
+    runtime: NeuralRuntime,
+    *,
+    block_size: int = 512,
+    converter_factory: ConverterFactory = _default_converter,
+) -> NeuralEngine:
+    """Build the Neural Engine; raises ``NeuralUnavailable`` with the real reason."""
+    if not runtime.ready:
+        raise NeuralUnavailable(runtime.reason)
+    try:
+        converter = converter_factory(runtime.root)
+        return NeuralEngine(converter, block_size=block_size)
+    except NeuralUnavailable:
+        raise
+    except Exception as exc:
+        raise NeuralUnavailable(f"{exc}") from exc
+
+
 def create_neural_engine(
     runtime: NeuralRuntime,
     *,
@@ -194,14 +218,15 @@ def create_neural_engine(
     converter_factory: ConverterFactory = _default_converter,
 ) -> NeuralEngine | None:
     """Build the Neural Engine, or None (with a log line) when it cannot run."""
-    if not runtime.ready:
-        log.info("Neural Engine unavailable: %s", runtime.reason)
-        return None
     try:
-        converter = converter_factory(runtime.root)
-        return NeuralEngine(converter, block_size=block_size)
-    except Exception as exc:
-        log.warning("Neural Engine failed to start: %s", exc)
+        return build_neural_engine(
+            runtime, block_size=block_size, converter_factory=converter_factory
+        )
+    except NeuralUnavailable as exc:
+        if runtime.ready:
+            log.warning("Neural Engine failed to start: %s", exc)
+        else:
+            log.info("Neural Engine unavailable: %s", exc)
         return None
 
 
