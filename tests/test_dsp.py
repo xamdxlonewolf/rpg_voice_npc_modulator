@@ -6,7 +6,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from votr.dsp import DspEngine, active_rms
+from votr.dsp import DspEngine, active_rms, breath_air
+from votr.engine import BaseEngine
 from votr.macros import load_macros
 from votr.session import Session
 from votr.spikes.pitch_core import stretch_available
@@ -382,35 +383,65 @@ def test_distance_is_gently_quieter_and_darker() -> None:
     assert balance(far) < balance(mid) * 0.3
 
 
-def test_breath_follows_the_voice_and_leaves_gaps_silent() -> None:
+def _frame_levels(samples: np.ndarray, frame: int) -> np.ndarray:
+    count = samples.size // frame
+    frames = samples[: count * frame].reshape(count, frame).astype(np.float64)
+    return np.sqrt(np.mean(frames * frames, axis=1))
+
+
+def test_breath_is_voice_shaped_air_not_white_noise() -> None:
     speech = _vowel(0.9)
-    take = _with_gaps(speech, 0.4, floor=0.001)
-    dry = _render_with({}, take)
-    wet = _render_with({"breath": 1.0}, take)
-    gap = slice(0, int(RATE * 0.35))
-    voiced = slice(int(RATE * 0.4), int(RATE * 0.4) + speech.size)
-    assert _band_db(wet[voiced], dry[voiced], 3000.0, 8000.0) > 4.0
-    # No hiss bed: the gap gains nothing (it only drops with the voice's makeup).
-    assert _band_db(wet[gap], dry[gap], 3000.0, 8000.0) < 1.0
-    assert _rms(wet[gap]) <= _rms(dry[gap]) * 1.1
-    assert abs(_level_delta_db(wet, dry)) < 1.5
-    # The air (3 kHz+) rides the syllable envelope rather than sitting under it.
-    spec = np.fft.rfft(wet[voiced].astype(np.float64))
-    spec[np.fft.rfftfreq(speech.size, 1.0 / RATE) < 3000.0] = 0.0
-    air = np.fft.irfft(spec, n=speech.size)
+    air = breath_air(speech, RATE)
+    white = np.random.default_rng(0).standard_normal(speech.size).astype(np.float32)
+    env_voice, _ = _log_envelope(speech)
+    env_air, _ = _log_envelope(air)
+    env_white, _ = _log_envelope(white)
+    # The air carries the voice's own formant shape; static does not.
+    assert float(np.corrcoef(env_air, env_voice)[0, 1]) > 0.7
+    assert float(np.corrcoef(env_white, env_voice)[0, 1]) < 0.3
+    # ...and it rides the syllables sample-tight, not a slow bed under them.
     frame = int(RATE * 0.02)
-    count = speech.size // frame
-    air_level = np.sqrt(
-        np.mean(air[: count * frame].reshape(count, frame) ** 2, axis=1)
-    )
-    voice_frames = dry[voiced][: count * frame].reshape(count, frame)
-    voice_level = np.sqrt(np.mean(voice_frames**2, axis=1))
-    assert float(np.corrcoef(air_level, voice_level)[0, 1]) > 0.75
+    air_level = _frame_levels(air, frame)
+    voice_level = _frame_levels(speech, frame)
+    assert float(np.corrcoef(air_level, voice_level)[0, 1]) > 0.9
     order = np.argsort(voice_level)
-    quarter = count // 4
-    assert np.mean(air_level[order[-quarter:]]) > 2.2 * np.mean(
+    quarter = order.size // 4
+    assert np.mean(air_level[order[-quarter:]]) > 5.0 * np.mean(
         air_level[order[:quarter]]
     )
+
+
+def test_breath_never_raises_the_noise_floor() -> None:
+    speech = _vowel(0.9)
+    gap = slice(0, int(RATE * 0.35))
+    voiced = slice(int(RATE * 0.4), int(RATE * 0.4) + speech.size)
+    for floor in (0.0, 0.001):
+        take = _with_gaps(speech, 0.4, floor=floor)
+        dry = _render_with({}, take)
+        for amount in (0.3, 1.0):
+            wet = _render_with({"breath": amount}, take)
+            assert _rms(wet[gap]) <= _rms(dry[gap]) * 1.05 + 1e-7
+            assert abs(_level_delta_db(wet, dry)) < 1.0
+        wet = _render_with({"breath": 1.0}, take)
+        assert float(np.corrcoef(wet[voiced], dry[voiced])[0, 1]) < 0.9
+        assert float(np.corrcoef(wet[voiced], dry[voiced])[0, 1]) > 0.5
+    # Digital silence in stays digital silence out.
+    silent = np.zeros(int(RATE * 0.5), dtype=np.float32)
+    assert float(np.max(np.abs(_render_with({"breath": 1.0}, silent)))) < 1e-6
+
+
+def test_breath_streaming_path_matches_render_floor_rule() -> None:
+    speech = _vowel(0.9)
+    take = _with_gaps(speech, 0.4, floor=0.001)
+    engine = DspEngine(prefer_rubband=False)
+    engine.set_params({"breath": 1.0})
+    engine.reset()
+    live = BaseEngine.render(engine, take)
+    gap = slice(0, int(RATE * 0.35))
+    voiced = slice(int(RATE * 0.4), int(RATE * 0.4) + speech.size)
+    assert _rms(live[gap]) <= _rms(take[gap]) * 1.05
+    assert float(np.corrcoef(live[voiced], take[voiced])[0, 1]) > 0.5
+    assert _rms(live[voiced]) > _rms(take[voiced]) * 0.6
 
 
 def test_gate_mutes_quiet_parts_and_leaves_speech_untouched() -> None:

@@ -43,6 +43,10 @@ _MAX_MATCH_GAIN = 4.0
 _FORMANT_FFT = 2048
 _FORMANT_SMOOTH_HZ = 350.0
 _FORMANT_MAX_DB = 24.0
+# Breath: whisperised copy of the voice (random-phase STFT), never free noise.
+_BREATH_FFT = 1024
+_BREATH_FLOOR_DB = -50.0
+_BREATH_SEED = 1234
 
 
 def _plugin_mono(array: np.ndarray) -> np.ndarray:
@@ -88,6 +92,30 @@ def active_rms(samples: np.ndarray, sample_rate: int) -> float:
     return float(np.sqrt(np.mean(kept * kept)))
 
 
+def _stft(x: np.ndarray, n_fft: int, hop: int) -> tuple[np.ndarray, np.ndarray, int]:
+    """Windowed frames of ``x`` (padded by one FFT each side). Returns frames,
+    window and padded length so ``_istft`` can undo it exactly."""
+    window = np.hanning(n_fft + 1)[:-1]
+    padded = np.pad(x, (n_fft, n_fft + hop))
+    count = 1 + (padded.size - n_fft) // hop
+    idx = np.arange(n_fft)[None, :] + hop * np.arange(count)[:, None]
+    return padded[idx] * window, window, padded.size
+
+
+def _istft(
+    frames: np.ndarray, window: np.ndarray, hop: int, padded_size: int, size: int
+) -> np.ndarray:
+    n_fft = window.size
+    out = np.zeros(padded_size, dtype=np.float64)
+    norm = np.zeros(padded_size, dtype=np.float64)
+    for i in range(frames.shape[0]):
+        start = i * hop
+        out[start : start + n_fft] += frames[i] * window
+        norm[start : start + n_fft] += window * window
+    out = out / np.maximum(norm, 1e-3)
+    return out[n_fft : n_fft + size]
+
+
 def formant_shift(
     samples: np.ndarray, semitones: float, sample_rate: int
 ) -> np.ndarray:
@@ -103,11 +131,7 @@ def formant_shift(
         return np.asarray(samples, dtype=np.float32)
     n_fft = _FORMANT_FFT
     hop = n_fft // 4
-    window = np.hanning(n_fft + 1)[:-1]
-    padded = np.pad(x, (n_fft, n_fft + hop))
-    count = 1 + (padded.size - n_fft) // hop
-    idx = np.arange(n_fft)[None, :] + hop * np.arange(count)[:, None]
-    frames = padded[idx] * window
+    frames, window, padded_size = _stft(x, n_fft, hop)
     spec = np.fft.rfft(frames, axis=1)
     mag = np.abs(spec)
     log_mag = np.log(mag + 1e-9)
@@ -123,15 +147,54 @@ def formant_shift(
     limit = _FORMANT_MAX_DB / 20.0 * np.log(10.0)
     correction = np.clip(warped - envelope, -limit, limit)
     spec = spec * np.exp(correction)
-    frames = np.fft.irfft(spec, n=n_fft, axis=1) * window
-    out = np.zeros(padded.size, dtype=np.float64)
-    norm = np.zeros(padded.size, dtype=np.float64)
-    for i in range(count):
-        start = i * hop
-        out[start : start + n_fft] += frames[i]
-        norm[start : start + n_fft] += window * window
-    out = out / np.maximum(norm, 1e-3)
-    return out[n_fft : n_fft + x.size].astype(np.float32)
+    frames = np.fft.irfft(spec, n=n_fft, axis=1)
+    return _istft(frames, window, hop, padded_size, x.size).astype(np.float32)
+
+
+def _air_weight(n_fft: int, sample_rate: int) -> np.ndarray:
+    """Aspiration sits above the fundamental and rolls off at the top."""
+    freqs = np.fft.rfftfreq(n_fft, 1.0 / sample_rate)
+    rise = np.clip((freqs - 300.0) / (2500.0 - 300.0), 0.0, 1.0) ** 0.5
+    return rise / (1.0 + (freqs / 8000.0) ** 4)
+
+
+def _whisper_frames(
+    frames: np.ndarray, weight: np.ndarray, rng: np.random.Generator
+) -> np.ndarray:
+    """Whispered copy of windowed frames: same magnitude spectrum, random phase.
+
+    Each frame keeps the voice's own formant shape and level, so the result is
+    aspiration that follows the words. Frames at or below a quiet-room floor
+    are zeroed so silence never gains a hiss bed.
+    """
+    voice_rms = np.sqrt(np.mean(frames * frames, axis=1))
+    spec = np.fft.rfft(frames, axis=1)
+    phase = rng.uniform(0.0, 2.0 * np.pi, spec.shape)
+    air_spec = np.abs(spec) * weight[None, :] * np.exp(1j * phase)
+    air = np.fft.irfft(air_spec, n=frames.shape[1], axis=1)
+    air_rms = np.sqrt(np.mean(air * air, axis=1))
+    level_db = 20.0 * np.log10(voice_rms + 1e-9)
+    presence = np.clip((level_db - _BREATH_FLOOR_DB) / 12.0, 0.0, 1.0)
+    scale = np.where(air_rms > 1e-9, voice_rms / np.maximum(air_rms, 1e-9), 0.0)
+    return air * (np.minimum(scale, 8.0) * presence)[:, None]
+
+
+def breath_air(samples: np.ndarray, sample_rate: int) -> np.ndarray:
+    """Whole-Take aspiration layer derived from the voice itself (see above)."""
+    x = np.asarray(samples, dtype=np.float64)
+    if x.size == 0:
+        return np.asarray(samples, dtype=np.float32)
+    n_fft = _BREATH_FFT
+    hop = n_fft // 4
+    frames, window, padded_size = _stft(x, n_fft, hop)
+    rng = np.random.default_rng(_BREATH_SEED)
+    air = _whisper_frames(frames, _air_weight(n_fft, sample_rate), rng)
+    return _istft(air, window, hop, padded_size, x.size).astype(np.float32)
+
+
+def mix_breath(voice: np.ndarray, air: np.ndarray, amount: float) -> np.ndarray:
+    """Voice steps back a little as the air comes up; air ≤ 0.9× the voice."""
+    return (voice * (1.0 - 0.35 * amount) + air * (0.9 * amount)).astype(np.float32)
 
 
 class DspEngine(BaseEngine):
@@ -179,8 +242,8 @@ class DspEngine(BaseEngine):
         self._gate_gain = 0.0
         self._gate_open = False
         self._gate_hold = 0
-        self._breath_env = 0.0
-        self._breath_gain = 0.0
+        self._breath_prev = np.zeros(self.block_size, dtype=np.float32)
+        self._breath_tail = np.zeros(self.block_size, dtype=np.float64)
         self._growl_phase = 0.0
 
     def _init_effects(self) -> None:
@@ -210,8 +273,8 @@ class DspEngine(BaseEngine):
             cutoff_frequency_hz=1050.0, gain_db=8.0, q=1.4
         )
         self._hollow_comb = pb.Delay(delay_seconds=0.009, feedback=0.3, mix=0.3)
-        self._breath_hp = pb.HighpassFilter(cutoff_frequency_hz=1500.0)
-        self._breath_lp = pb.LowpassFilter(cutoff_frequency_hz=7500.0)
+        self._breath_window = np.sqrt(np.hanning(2 * self.block_size + 1)[:-1])
+        self._breath_weight = _air_weight(2 * self.block_size, self.sample_rate)
         self._dist_lp1 = pb.LowpassFilter(cutoff_frequency_hz=12000.0)
         self._dist_lp2 = pb.LowpassFilter(cutoff_frequency_hz=12000.0)
 
@@ -231,8 +294,6 @@ class DspEngine(BaseEngine):
             self._hollow_lp2,
             self._hollow_peak,
             self._hollow_comb,
-            self._breath_hp,
-            self._breath_lp,
             self._dist_lp1,
             self._dist_lp2,
         )
@@ -295,6 +356,11 @@ class DspEngine(BaseEngine):
                 self._params["pitch_semitones"] = 0.0
                 self._params["formant_semitones"] = 0.0
                 self._update_filters()
+            breath = float(self._params["breath"])
+            if breath >= 0.01:
+                air = breath_air(samples, self.sample_rate)
+                samples = mix_breath(samples, air, breath)
+                self._params["breath"] = 0.0
             out = super().render(samples)
         finally:
             self._params.update(saved)
@@ -587,25 +653,25 @@ class DspEngine(BaseEngine):
         return ((1.0 - mix) * work + mix * wet).astype(np.float32)
 
     def _apply_breath(self, work: np.ndarray) -> np.ndarray:
+        """Streaming Breath: one whisperised frame per block (one block of lag).
+
+        Frame = previous block + this block under a sqrt-Hann window, so the
+        50 %-overlap add is flat. Render does the whole Take in ``breath_air``.
+        """
         amount = float(self._params["breath"])
         if amount < 0.01:
+            self._breath_prev = work.copy()
+            self._breath_tail.fill(0.0)
             return work
-        levels = _frame_rms(work, _ENV_FRAME)
-        env, self._breath_env = self._follow(
-            levels, self._breath_env, attack_ms=5.0, release_ms=70.0
-        )
-        # Air follows the voice and trails each word; true silence gets nothing.
-        onset = _db_to_gain(-52.0)
-        presence = np.clip((env - onset) / (3.0 * onset), 0.0, 1.0)
-        target = env * presence * (0.25 + 0.55 * amount)
-        previous = self._breath_gain
-        self._breath_gain = float(target[-1])
-        ramp = _per_sample(target, previous, work.size, _ENV_FRAME)
-        noise = self._rng.standard_normal(work.size).astype(np.float32)
-        air = self._run(self._breath_lp, self._run(self._breath_hp, noise))
-        air = air / max(1e-6, float(np.sqrt(np.mean(air * air))))
-        voice = work * (1.0 - 0.3 * amount)
-        return (voice + air * ramp).astype(np.float32)
+        n = work.size
+        frame = np.concatenate([self._breath_prev, work]).astype(np.float64)
+        frame = frame * self._breath_window
+        air = _whisper_frames(frame[None, :], self._breath_weight, self._rng)[0]
+        air = air * self._breath_window
+        out_air = air[:n] + self._breath_tail
+        self._breath_tail = air[n:].copy()
+        self._breath_prev = work.copy()
+        return mix_breath(work, out_air.astype(np.float32), amount)
 
     def _apply_distance(self, work: np.ndarray) -> np.ndarray:
         amount = float(self._params["distance"])
