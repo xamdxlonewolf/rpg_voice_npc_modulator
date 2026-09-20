@@ -21,19 +21,28 @@ from votr.voice import DSP_ENGINE_ID
 
 SCHEMA: tuple[ParameterSpec, ...] = (
     ParameterSpec("pitch_semitones", "Pitch (semitones)", -12.0, 12.0, 0.0),
-    ParameterSpec("formant_semitones", "Body / formant", -12.0, 12.0, 0.0),
-    ParameterSpec("tonality", "Tonality", 0.0, 1.0, 0.5),
-    ParameterSpec("growl", "Growl", 0.0, 1.0, 0.0),
-    ParameterSpec("hollow", "Hollow", 0.0, 1.0, 0.0),
-    ParameterSpec("room", "Room", 0.0, 1.0, 0.0),
-    ParameterSpec("distance", "Distance", 0.0, 1.0, 0.0),
-    ParameterSpec("breath", "Breath", 0.0, 1.0, 0.0),
-    ParameterSpec("gate", "Gate", 0.0, 1.0, 0.0),
+    ParameterSpec("formant_semitones", "Body (− chesty · + thin)", -12.0, 12.0, 0.0),
+    ParameterSpec("tonality", "Tonality (bright ← → dark)", 0.0, 1.0, 0.5),
+    ParameterSpec("growl", "Growl (0 = off)", 0.0, 1.0, 0.0),
+    ParameterSpec("hollow", "Hollow (0 = off)", 0.0, 1.0, 0.0),
+    ParameterSpec("room", "Room (0 = off)", 0.0, 1.0, 0.0),
+    ParameterSpec("distance", "Distance (0 = close)", 0.0, 1.0, 0.0),
+    ParameterSpec("breath", "Breath (0 = off)", 0.0, 1.0, 0.0),
+    ParameterSpec("gate", "Gate (0 = off)", 0.0, 1.0, 0.0),
 )
 
 _DEFAULTS = {spec.key: spec.default for spec in SCHEMA}
 # python-stretch only transposes when the process hop is ≥ outputLatency (~30 ms).
 STRETCH_HOP = 1440
+# Envelope followers run on short sub-frames and interpolate gain per sample,
+# so gates and breath never zipper or modulate inside a waveform cycle.
+_ENV_FRAME = 64
+_LEVEL_FRAME_SECONDS = 0.020
+_MAX_MATCH_GAIN = 4.0
+# Body on python-stretch: STFT spectral-envelope warp (no formant API in binding).
+_FORMANT_FFT = 2048
+_FORMANT_SMOOTH_HZ = 350.0
+_FORMANT_MAX_DB = 24.0
 
 
 def _plugin_mono(array: np.ndarray) -> np.ndarray:
@@ -47,8 +56,82 @@ def _semitone_ratio(semitones: float) -> float:
     return float(2.0 ** (semitones / 12.0))
 
 
-def _one_pole_coeff(cutoff_hz: float, sample_rate: int) -> float:
-    return float(1.0 - np.exp(-2.0 * np.pi * cutoff_hz / sample_rate))
+def _db_to_gain(db: float) -> float:
+    return float(10.0 ** (db / 20.0))
+
+
+def _frame_rms(samples: np.ndarray, frame: int) -> np.ndarray:
+    """RMS per ``frame``-sample sub-frame; a ragged tail keeps its own frame."""
+    n = samples.size
+    count = max(1, -(-n // frame))
+    padded = np.zeros(count * frame, dtype=np.float64)
+    padded[:n] = samples
+    blocks = padded.reshape(count, frame)
+    return np.sqrt(np.mean(blocks * blocks, axis=1))
+
+
+def _per_sample(values: np.ndarray, previous: float, n: int, frame: int) -> np.ndarray:
+    """Linearly ramp sub-frame values across their samples (no gain steps)."""
+    knots = np.concatenate([[previous], values])
+    ends = np.arange(knots.size) * frame
+    return np.interp(np.arange(n), ends, knots).astype(np.float32)
+
+
+def active_rms(samples: np.ndarray, sample_rate: int) -> float:
+    """RMS of the louder frames only, so silence, gates and tails do not skew it."""
+    frame = max(1, int(sample_rate * _LEVEL_FRAME_SECONDS))
+    levels = _frame_rms(np.asarray(samples, dtype=np.float64), frame)
+    loudest = float(np.max(levels)) if levels.size else 0.0
+    if loudest <= 1e-6:
+        return 0.0
+    kept = levels[levels >= loudest * 0.1]
+    return float(np.sqrt(np.mean(kept * kept)))
+
+
+def formant_shift(
+    samples: np.ndarray, semitones: float, sample_rate: int
+) -> np.ndarray:
+    """Move the spectral envelope (vocal-tract size) without touching pitch.
+
+    STFT frames are split into a cepstrally smoothed envelope and fine harmonic
+    structure; the envelope is stretched along frequency by the semitone ratio
+    and re-imposed. Positive = smaller/thinner tract, negative = larger/chestier.
+    """
+    ratio = _semitone_ratio(semitones)
+    x = np.asarray(samples, dtype=np.float64)
+    if x.size == 0 or abs(ratio - 1.0) < 1e-4:
+        return np.asarray(samples, dtype=np.float32)
+    n_fft = _FORMANT_FFT
+    hop = n_fft // 4
+    window = np.hanning(n_fft + 1)[:-1]
+    padded = np.pad(x, (n_fft, n_fft + hop))
+    count = 1 + (padded.size - n_fft) // hop
+    idx = np.arange(n_fft)[None, :] + hop * np.arange(count)[:, None]
+    frames = padded[idx] * window
+    spec = np.fft.rfft(frames, axis=1)
+    mag = np.abs(spec)
+    log_mag = np.log(mag + 1e-9)
+    cep = np.fft.irfft(log_mag, n=n_fft, axis=1)
+    lifter = max(8, int(sample_rate / _FORMANT_SMOOTH_HZ))
+    cep[:, lifter:-lifter] = 0.0
+    envelope = np.fft.rfft(cep, n=n_fft, axis=1).real
+    bins = np.arange(envelope.shape[1], dtype=np.float64)
+    source = np.clip(bins / ratio, 0.0, bins[-1])
+    warped = np.empty_like(envelope)
+    for i in range(envelope.shape[0]):
+        warped[i] = np.interp(source, bins, envelope[i])
+    limit = _FORMANT_MAX_DB / 20.0 * np.log(10.0)
+    correction = np.clip(warped - envelope, -limit, limit)
+    spec = spec * np.exp(correction)
+    frames = np.fft.irfft(spec, n=n_fft, axis=1) * window
+    out = np.zeros(padded.size, dtype=np.float64)
+    norm = np.zeros(padded.size, dtype=np.float64)
+    for i in range(count):
+        start = i * hop
+        out[start : start + n_fft] += frames[i]
+        norm[start : start + n_fft] += window * window
+    out = out / np.maximum(norm, 1e-3)
+    return out[n_fft : n_fft + x.size].astype(np.float32)
 
 
 class DspEngine(BaseEngine):
@@ -72,10 +155,6 @@ class DspEngine(BaseEngine):
         super().__init__(block_size=chosen, sample_rate=sample_rate)
         self._params = dict(_DEFAULTS)
         self._macro_defs = macros or {}
-        self._env = 0.0
-        self._phase = 0.0
-        self._comb = np.zeros(max(8, int(sample_rate * 0.012)), dtype=np.float32)
-        self._comb_i = 0
         self._room_delay = np.zeros(max(8, int(sample_rate * 0.090)), dtype=np.float32)
         self._room_i = 0
         self._shifter: Any = None
@@ -88,12 +167,21 @@ class DspEngine(BaseEngine):
         self._fade_left = 0
         self._fade_total = 0
         self._fade_prev: np.ndarray | None = None
-        self._lp = 0.0
-        self._tone_lp = 0.0
-        self._dist_lp = 0.0
-        self._hp = 0.0
+        self._defer_distance_gain = False
+        self._reset_followers()
         self._init_effects()
+        self._update_filters()
         self._rebuild_shifter()
+
+    def _reset_followers(self) -> None:
+        self._gate_env = 0.0
+        # Start closed: a Take that opens on silence stays silent from sample 0.
+        self._gate_gain = 0.0
+        self._gate_open = False
+        self._gate_hold = 0
+        self._breath_env = 0.0
+        self._breath_gain = 0.0
+        self._growl_phase = 0.0
 
     def _init_effects(self) -> None:
         import pedalboard as pb
@@ -106,38 +194,89 @@ class DspEngine(BaseEngine):
             width=0.55,
         )
         self._limiter = pb.Limiter(threshold_db=-1.5, release_ms=50)
+        # Body fallback for the streaming path (render uses a true formant shift).
+        self._body_low = pb.LowShelfFilter(cutoff_frequency_hz=380.0, gain_db=0.0)
+        self._body_high = pb.HighShelfFilter(cutoff_frequency_hz=2600.0, gain_db=0.0)
+        # Tonality: a tilt pivoting near 1 kHz — lows and highs move opposite ways.
+        self._tone_low = pb.LowShelfFilter(cutoff_frequency_hz=650.0, gain_db=0.0)
+        self._tone_high = pb.HighShelfFilter(cutoff_frequency_hz=2000.0, gain_db=0.0)
+        self._growl_pre = pb.HighpassFilter(cutoff_frequency_hz=170.0)
+        self._growl_post = pb.LowpassFilter(cutoff_frequency_hz=6500.0)
+        self._hollow_hp = pb.HighpassFilter(cutoff_frequency_hz=380.0)
+        self._hollow_hp2 = pb.HighpassFilter(cutoff_frequency_hz=380.0)
+        self._hollow_lp = pb.LowpassFilter(cutoff_frequency_hz=2600.0)
+        self._hollow_lp2 = pb.LowpassFilter(cutoff_frequency_hz=2600.0)
+        self._hollow_peak = pb.PeakFilter(
+            cutoff_frequency_hz=1050.0, gain_db=8.0, q=1.4
+        )
+        self._hollow_comb = pb.Delay(delay_seconds=0.009, feedback=0.3, mix=0.3)
+        self._breath_hp = pb.HighpassFilter(cutoff_frequency_hz=1500.0)
+        self._breath_lp = pb.LowpassFilter(cutoff_frequency_hz=7500.0)
+        self._dist_lp1 = pb.LowpassFilter(cutoff_frequency_hz=12000.0)
+        self._dist_lp2 = pb.LowpassFilter(cutoff_frequency_hz=12000.0)
+
+    def _plugins(self) -> tuple[Any, ...]:
+        return (
+            self._reverb,
+            self._limiter,
+            self._body_low,
+            self._body_high,
+            self._tone_low,
+            self._tone_high,
+            self._growl_pre,
+            self._growl_post,
+            self._hollow_hp,
+            self._hollow_hp2,
+            self._hollow_lp,
+            self._hollow_lp2,
+            self._hollow_peak,
+            self._hollow_comb,
+            self._breath_hp,
+            self._breath_lp,
+            self._dist_lp1,
+            self._dist_lp2,
+        )
+
+    def _run(self, plugin: Any, work: np.ndarray) -> np.ndarray:
+        return _plugin_mono(
+            plugin.process(
+                work, self.sample_rate, buffer_size=self.block_size, reset=False
+            )
+        )
 
     def reset(self) -> None:
         """Clear streaming leftovers before rendering a Take."""
-        self._env = 0.0
-        self._phase = 0.0
-        self._comb.fill(0)
-        self._comb_i = 0
         self._room_delay.fill(0)
         self._room_i = 0
         self._fade_left = 0
         self._fade_prev = None
-        self._lp = 0.0
-        self._tone_lp = 0.0
-        self._dist_lp = 0.0
-        self._hp = 0.0
+        self._reset_followers()
         self._stretch_pending = np.zeros(0, dtype=np.float32)
         self._stretch_ready = np.zeros(0, dtype=np.float32)
         self._rebuild_shifter()
         silent = np.zeros(self.block_size, dtype=np.float32)
-        for plugin in (self._reverb, self._limiter):
+        for plugin in self._plugins():
             plugin.process(
                 silent, self.sample_rate, buffer_size=self.block_size, reset=True
             )
 
-    def _stretch_offline(self, samples: np.ndarray) -> np.ndarray:
-        self._rebuild_shifter()
-        framed = np.ascontiguousarray(samples.reshape(1, -1))
-        shifted = self._shifter.process(framed)
-        out = np.asarray(shifted, dtype=np.float32).reshape(-1)
-        if out.size >= samples.size:
-            return out[: samples.size]
-        return np.pad(out, (0, samples.size - out.size))
+    def _stretch_offline(
+        self, samples: np.ndarray, *, pitch: float, formant: float
+    ) -> np.ndarray:
+        """Whole-Take pitch (python-stretch) then Body (spectral-envelope warp)."""
+        work = samples
+        if abs(pitch) >= 0.05:
+            self._rebuild_shifter()
+            framed = np.ascontiguousarray(work.reshape(1, -1))
+            shifted = self._shifter.process(framed)
+            work = np.asarray(shifted, dtype=np.float32).reshape(-1)
+            if work.size >= samples.size:
+                work = work[: samples.size]
+            else:
+                work = np.pad(work, (0, samples.size - work.size))
+        if abs(formant) >= 0.05:
+            work = formant_shift(work, formant, self.sample_rate)
+        return work
 
     def render(self, take: np.ndarray) -> np.ndarray:
         """Render a Take from a clean state — not leftover stream memory."""
@@ -145,21 +284,39 @@ class DspEngine(BaseEngine):
         samples = np.asarray(take, dtype=np.float32).reshape(-1)
         if samples.size == 0:
             return samples.copy()
+        dry_level = active_rms(samples, self.sample_rate)
         pitch = float(self._params["pitch_semitones"])
-        if not self._use_rubband and abs(pitch) >= 0.05:
-            samples = self._stretch_offline(samples)
-            saved = pitch
-            self._params["pitch_semitones"] = 0.0
-            try:
-                out = super().render(samples)
-            finally:
-                self._params["pitch_semitones"] = saved
-        else:
+        formant = float(self._params["formant_semitones"])
+        saved = dict(self._params)
+        self._defer_distance_gain = True
+        try:
+            if not self._use_rubband and (abs(pitch) >= 0.05 or abs(formant) >= 0.05):
+                samples = self._stretch_offline(samples, pitch=pitch, formant=formant)
+                self._params["pitch_semitones"] = 0.0
+                self._params["formant_semitones"] = 0.0
+                self._update_filters()
             out = super().render(samples)
+        finally:
+            self._params.update(saved)
+            self._defer_distance_gain = False
+            self._update_filters()
+        out = self._match_level(out, dry_level)
+        out = (out * self._distance_gain()).astype(np.float32)
         room = float(self._params["room"])
         if room > 0.01:
             out = self._apply_room_offline(out, room)
+        peak = float(np.max(np.abs(out))) if out.size else 0.0
+        if peak > 0.98:
+            out = _plugin_mono(self._limiter.process(out, self.sample_rate, reset=True))
         return np.clip(out, -1.0, 1.0).astype(np.float32)
+
+    def _match_level(self, out: np.ndarray, dry_level: float) -> np.ndarray:
+        """Bring the effect chain back to the Take's level (Distance is separate)."""
+        wet_level = active_rms(out, self.sample_rate)
+        if dry_level <= 1e-6 or wet_level <= 1e-6:
+            return out
+        gain = min(_MAX_MATCH_GAIN, max(1.0 / _MAX_MATCH_GAIN, dry_level / wet_level))
+        return (out * gain).astype(np.float32)
 
     def _rebuild_shifter(self) -> None:
         pitch = float(self._params["pitch_semitones"])
@@ -200,9 +357,7 @@ class DspEngine(BaseEngine):
             self._stretch_ready = self._stretch_ready[work.size :]
             return out.astype(np.float32)
         pad = work.size - self._stretch_ready.size
-        out = np.concatenate(
-            [np.zeros(pad, dtype=np.float32), self._stretch_ready]
-        )
+        out = np.concatenate([np.zeros(pad, dtype=np.float32), self._stretch_ready])
         self._stretch_ready = np.zeros(0, dtype=np.float32)
         return out.astype(np.float32)
 
@@ -235,13 +390,35 @@ class DspEngine(BaseEngine):
             self._stretch_pending = np.zeros(0, dtype=np.float32)
             self._stretch_ready = np.zeros(0, dtype=np.float32)
             self._rebuild_shifter()
+        self._update_filters()
+        if crossfade_ms > 0:
+            self._fade_total = int(self.sample_rate * crossfade_ms / 1000.0)
+            self._fade_left = self._fade_total
+
+    def _update_filters(self) -> None:
         room = float(self._params["room"])
         self._reverb.room_size = 0.28 + 0.50 * room
         self._reverb.wet_level = 0.82 * room
         self._reverb.dry_level = max(0.22, 1.0 - 0.52 * room)
-        if crossfade_ms > 0:
-            self._fade_total = int(self.sample_rate * crossfade_ms / 1000.0)
-            self._fade_left = self._fade_total
+
+        body = float(self._params["formant_semitones"]) / 12.0
+        self._body_low.gain_db = -7.0 * body
+        self._body_high.gain_db = 5.0 * body
+
+        tilt = (0.5 - float(self._params["tonality"])) * 2.0
+        self._tone_low.gain_db = -6.0 * tilt
+        self._tone_high.gain_db = 9.0 * tilt
+
+        distance = float(self._params["distance"])
+        cutoff = 12000.0 * (1500.0 / 12000.0) ** distance
+        self._dist_lp1.cutoff_frequency_hz = cutoff
+        self._dist_lp2.cutoff_frequency_hz = cutoff
+
+    def _distance_gain(self) -> float:
+        amount = float(self._params["distance"])
+        if amount < 0.01:
+            return 1.0
+        return _db_to_gain(-10.0 * amount**1.5)
 
     def apply_macro(self, tag: str) -> None:
         macro = self._macro_defs.get(tag)
@@ -272,11 +449,7 @@ class DspEngine(BaseEngine):
         work = self._apply_room_block(work)
         peak = float(np.max(np.abs(work))) if work.size else 0.0
         if peak > 0.98:
-            work = _plugin_mono(
-                self._limiter.process(
-                    work, self.sample_rate, buffer_size=self.block_size, reset=False
-                )
-            )
+            work = self._run(self._limiter, work)
         else:
             work = np.clip(work, -1.0, 1.0)
         work = self._crossfade(work)
@@ -298,127 +471,150 @@ class DspEngine(BaseEngine):
         self._fade_left = max(0, self._fade_left - block.size)
         return mixed.astype(np.float32)
 
+    def _follow(
+        self,
+        levels: np.ndarray,
+        state: float,
+        *,
+        attack_ms: float,
+        release_ms: float,
+    ) -> tuple[np.ndarray, float]:
+        """Attack/release follower over sub-frame levels."""
+        frame_ms = 1000.0 * _ENV_FRAME / self.sample_rate
+        attack = 1.0 - float(np.exp(-frame_ms / max(attack_ms, 1e-3)))
+        release = 1.0 - float(np.exp(-frame_ms / max(release_ms, 1e-3)))
+        out = np.empty(levels.size, dtype=np.float64)
+        for i, level in enumerate(levels):
+            coeff = attack if level > state else release
+            state += coeff * (float(level) - state)
+            out[i] = state
+        return out, state
+
     def _apply_gate(self, work: np.ndarray) -> np.ndarray:
         amount = float(self._params["gate"])
+        levels = _frame_rms(work, _ENV_FRAME)
+        env, self._gate_env = self._follow(
+            levels, self._gate_env, attack_ms=1.5, release_ms=60.0
+        )
         if amount < 0.01:
-            peak = float(np.max(np.abs(work))) if work.size else 0.0
-            self._env = 0.6 * self._env + 0.4 * peak
+            self._gate_gain = 1.0
+            self._gate_open = True
             return work
-        # Fast attack / slower release so speech opens and silence closes.
-        attack = 0.45
-        release = 0.18
-        threshold = 0.010 + amount * 0.17
-        env = self._env
-        out = np.empty_like(work)
-        floor = 0.02 * (1.0 - amount)
-        for i, sample in enumerate(work):
-            mag = abs(float(sample))
-            coeff = attack if mag > env else release
-            env += coeff * (mag - env)
-            if env < threshold:
-                gain = (env / threshold) ** 4
-                gain = floor + (1.0 - floor) * gain * (1.0 - 0.75 * amount)
-                out[i] = sample * gain
-            else:
-                out[i] = sample
-        self._env = env
-        return out.astype(np.float32)
-
-    def _tilt(
-        self,
-        work: np.ndarray,
-        amount: float,
-        state_attr: str,
-        *,
-        corner_hz: float,
-    ) -> np.ndarray:
-        """One-pole tilt. Positive amount = brighter / thinner."""
-        if abs(amount) < 0.02:
-            return work
-        coeff = _one_pole_coeff(corner_hz, self.sample_rate)
-        low = float(getattr(self, state_attr))
-        out = np.empty_like(work)
-        for i, sample in enumerate(work):
-            value = float(sample)
-            low += coeff * (value - low)
-            out[i] = value + amount * (value - low)
-        setattr(self, state_attr, low)
-        return out.astype(np.float32)
+        # Threshold on the speech RMS envelope: −54 dB (just above a quiet room)
+        # up to −28 dB. Hysteresis + hold keep word tails from chattering.
+        open_at = _db_to_gain(-54.0 + 26.0 * amount)
+        close_at = open_at * _db_to_gain(-6.0)
+        floor = _db_to_gain(-30.0 - 40.0 * amount)
+        hold_frames = int(0.120 * self.sample_rate / _ENV_FRAME)
+        frame_ms = 1000.0 * _ENV_FRAME / self.sample_rate
+        open_step = 1.0 - float(np.exp(-frame_ms / 2.5))
+        close_step = 1.0 - float(np.exp(-frame_ms / 70.0))
+        gains = np.empty(env.size, dtype=np.float64)
+        gain = self._gate_gain
+        for i, level in enumerate(env):
+            if level >= open_at:
+                self._gate_open = True
+                self._gate_hold = hold_frames
+            elif level < close_at:
+                if self._gate_hold > 0:
+                    self._gate_hold -= 1
+                else:
+                    self._gate_open = False
+            target = 1.0 if self._gate_open else floor
+            step = open_step if target > gain else close_step
+            gain += step * (target - gain)
+            gains[i] = gain
+        previous = self._gate_gain
+        self._gate_gain = gain
+        ramp = _per_sample(gains, previous, work.size, _ENV_FRAME)
+        return (work * ramp).astype(np.float32)
 
     def _apply_body(self, work: np.ndarray) -> np.ndarray:
-        # Stretch has no formant API. Map Body / formant to a chest/thin tilt:
-        # +semitones = smaller/thinner, −semitones = larger/darker.
-        amount = float(self._params["formant_semitones"]) / 12.0 * 1.45
-        return self._tilt(work, amount, "_lp", corner_hz=280.0)
+        # Streaming fallback only: a chest/thin shelf pair. Preview render does a
+        # true formant shift in _stretch_offline and zeroes this parameter.
+        body = float(self._params["formant_semitones"]) / 12.0
+        if abs(body) < 0.02:
+            return work
+        wet = self._run(self._body_high, self._run(self._body_low, work))
+        return (wet * _db_to_gain(1.2 * body)).astype(np.float32)
 
     def _apply_tonality(self, work: np.ndarray) -> np.ndarray:
-        # 0 = brighter presence, 1 = darker. Default 0.5 is dry.
-        amount = (0.5 - float(self._params["tonality"])) * 2.5
-        return self._tilt(work, amount, "_tone_lp", corner_hz=1400.0)
+        # 0 = brighter, 1 = darker. Default 0.5 is dry. Shelves tilt around 1 kHz;
+        # the pair is roughly level-neutral so it reads as timbre, not volume.
+        tilt = (0.5 - float(self._params["tonality"])) * 2.0
+        if abs(tilt) < 0.02:
+            return work
+        wet = self._run(self._tone_high, self._run(self._tone_low, work))
+        return (wet * _db_to_gain(-1.5 * tilt)).astype(np.float32)
 
     def _apply_growl(self, work: np.ndarray) -> np.ndarray:
         amount = float(self._params["growl"])
         if amount < 0.01:
             return work
-        drive = 1.0 + 18.0 * amount
-        wet = np.tanh(work * drive).astype(np.float32)
-        mix = 0.28 + 0.67 * amount
+        drive = 1.0 + 22.0 * amount
+        bias = 0.35 * amount
+        pre = self._run(self._growl_pre, work).astype(np.float64)
+        shaped = np.tanh(drive * pre + bias) - np.tanh(bias)
+        # Small signals see gain ≈ drive; take it back out so the saturation
+        # reads as grit and compression rather than a louder voice.
+        shaped /= drive**0.85
+        n = work.size
+        rate_hz = 34.0 + 18.0 * amount
+        phase = (
+            self._growl_phase + 2 * np.pi * rate_hz * np.arange(n) / self.sample_rate
+        )
+        self._growl_phase = float(
+            (phase[-1] + 2 * np.pi * rate_hz / self.sample_rate) % (2 * np.pi)
+        )
+        depth = 0.45 * amount
+        rasp = 1.0 - depth * (0.5 + 0.5 * np.sin(phase))
+        wet = self._run(self._growl_post, (shaped * rasp).astype(np.float32))
+        mix = amount**0.7
         return ((1.0 - mix) * work + mix * wet).astype(np.float32)
 
     def _apply_hollow(self, work: np.ndarray) -> np.ndarray:
+        # Unipolar: 0 is off. Wet = a cupped, tube-like cavity (band-limited with
+        # a mid resonance and a short boxy comb), not a ringing metallic comb.
         amount = float(self._params["hollow"])
         if amount < 0.01:
             return work
-        n = work.size
-        phase = self._phase + 2 * np.pi * 90.0 * np.arange(n) / self.sample_rate
-        step = 2 * np.pi * 90.0 / self.sample_rate
-        self._phase = float((phase[-1] + step) % (2 * np.pi))
-        ring = work * np.sin(phase).astype(np.float32)
-        comb = np.empty_like(work)
-        delay = self._comb
-        index = self._comb_i
-        feedback = 0.58 + 0.22 * amount
-        for i, sample in enumerate(work):
-            delayed = float(delay[index])
-            mixed = float(sample) + feedback * delayed
-            comb[i] = mixed
-            delay[index] = mixed * 0.72 + float(sample) * 0.28
-            index = (index + 1) % delay.size
-        self._comb_i = index
-        wet = 0.10 * ring + 0.90 * comb
-        mix = 0.82 * amount
+        wet = self._run(self._hollow_hp2, self._run(self._hollow_hp, work))
+        wet = self._run(self._hollow_lp2, self._run(self._hollow_lp, wet))
+        wet = self._run(self._hollow_peak, wet)
+        wet = self._run(self._hollow_comb, wet)
+        wet = wet * 1.35
+        mix = amount
         return ((1.0 - mix) * work + mix * wet).astype(np.float32)
 
     def _apply_breath(self, work: np.ndarray) -> np.ndarray:
         amount = float(self._params["breath"])
         if amount < 0.01:
             return work
+        levels = _frame_rms(work, _ENV_FRAME)
+        env, self._breath_env = self._follow(
+            levels, self._breath_env, attack_ms=5.0, release_ms=70.0
+        )
+        # Air follows the voice and trails each word; true silence gets nothing.
+        onset = _db_to_gain(-52.0)
+        presence = np.clip((env - onset) / (3.0 * onset), 0.0, 1.0)
+        target = env * presence * (0.25 + 0.55 * amount)
+        previous = self._breath_gain
+        self._breath_gain = float(target[-1])
+        ramp = _per_sample(target, previous, work.size, _ENV_FRAME)
         noise = self._rng.standard_normal(work.size).astype(np.float32)
-        coeff = _one_pole_coeff(1600.0, self.sample_rate)
-        low = self._hp
-        air = np.empty_like(noise)
-        for i, sample in enumerate(noise):
-            low += coeff * (float(sample) - low)
-            air[i] = float(sample) - low
-        self._hp = low
-        env = np.minimum(1.0, np.abs(work) * 3.2)
-        layer = air * (0.18 + 0.82 * env) * (0.36 * amount)
-        return (work + layer).astype(np.float32)
+        air = self._run(self._breath_lp, self._run(self._breath_hp, noise))
+        air = air / max(1e-6, float(np.sqrt(np.mean(air * air))))
+        voice = work * (1.0 - 0.3 * amount)
+        return (voice + air * ramp).astype(np.float32)
 
     def _apply_distance(self, work: np.ndarray) -> np.ndarray:
         amount = float(self._params["distance"])
         if amount < 0.01:
             return work
-        cutoff = 280.0 + 6200.0 * (1.0 - amount) ** 1.6
-        coeff = _one_pole_coeff(cutoff, self.sample_rate)
-        low = self._dist_lp
-        out = np.empty_like(work)
-        for i, sample in enumerate(work):
-            low += coeff * (float(sample) - low)
-            out[i] = low
-        self._dist_lp = low
-        gain = 1.0 - 0.72 * amount
-        return (out * gain).astype(np.float32)
+        darker = self._run(self._dist_lp2, self._run(self._dist_lp1, work))
+        if self._defer_distance_gain:
+            return darker
+        return (darker * self._distance_gain()).astype(np.float32)
 
     def _apply_room_block(self, work: np.ndarray) -> np.ndarray:
         amount = float(self._params["room"])

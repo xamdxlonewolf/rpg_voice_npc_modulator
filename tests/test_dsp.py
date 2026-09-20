@@ -6,7 +6,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from votr.dsp import DspEngine
+from votr.dsp import DspEngine, active_rms
 from votr.macros import load_macros
 from votr.session import Session
 from votr.spikes.pitch_core import stretch_available
@@ -129,38 +129,111 @@ def test_new_voice_does_not_keep_previous_params(tmp_path) -> None:
     assert params["pitch_semitones"] == pytest.approx(0.0)
 
 
-def _speech_like(seconds: float, rate: int, f0: float = 140.0) -> np.ndarray:
-    n = int(rate * seconds)
-    t = np.arange(n, dtype=np.float32) / rate
-    voiced = np.zeros(n, dtype=np.float32)
-    for harmonic, amp in enumerate(
-        (0.24, 0.13, 0.08, 0.055, 0.04, 0.03, 0.022, 0.016), start=1
-    ):
-        voiced += amp * np.sin(2 * np.pi * f0 * harmonic * t)
-    rng = np.random.default_rng(0)
-    noise = rng.standard_normal(n).astype(np.float32)
-    air = np.empty_like(noise)
-    air[0] = noise[0]
-    air[1:] = noise[1:] - 0.82 * noise[:-1]
-    return (voiced + 0.045 * air).astype(np.float32)
+# --- Slider character tests -------------------------------------------------
+# Michael's Windows listen after #13: most sliders read as volume or static.
+# These assert spectral shape, crest, harmonic content and noise floor with the
+# level held near dry — RMS-only checks let "just louder" slip through.
+
+RATE = 48_000
+_FORMANTS = ((550.0, 80.0), (1400.0, 110.0), (2500.0, 160.0), (3400.0, 220.0))
+
+
+def _vowel(
+    seconds: float,
+    *,
+    f0: float = 120.0,
+    peak: float = 0.3,
+    syllables: bool = True,
+    seed: int = 0,
+) -> np.ndarray:
+    """Harmonic vowel with real formant peaks and a 3.5 Hz syllable envelope."""
+    n = int(RATE * seconds)
+    t = np.arange(n, dtype=np.float64) / RATE
+    rng = np.random.default_rng(seed)
+    vibrato = 0.003 * np.sin(2 * np.pi * 5.0 * t) / (2 * np.pi * 5.0) * f0
+    voiced = np.zeros(n)
+    for k in range(1, int(7000 / f0)):
+        freq = k * f0
+        envelope = sum(
+            1.0 / (1.0 + ((freq - centre) / width) ** 2) for centre, width in _FORMANTS
+        )
+        tilt = (f0 / freq) ** 1.0
+        voiced += envelope * tilt * np.sin(2 * np.pi * k * (f0 * t + vibrato))
+    air = rng.standard_normal(n)
+    air = np.convolve(air, np.hanning(9) / np.sum(np.hanning(9)), mode="same")
+    air = air - np.convolve(air, np.ones(48) / 48, mode="same")
+    signal = voiced + 0.12 * air * np.max(np.abs(voiced))
+    if syllables:
+        signal *= (0.5 + 0.5 * np.sin(2 * np.pi * 3.5 * t - np.pi / 2)) ** 0.7
+    return (signal / np.max(np.abs(signal)) * peak).astype(np.float32)
 
 
 def _rms(samples: np.ndarray) -> float:
-    return float(np.sqrt(np.mean(samples * samples)) + 1e-12)
+    return float(np.sqrt(np.mean(samples.astype(np.float64) ** 2)) + 1e-12)
+
+
+def _db(value: float) -> float:
+    return float(20.0 * np.log10(max(value, 1e-12)))
 
 
 def _crest(samples: np.ndarray) -> float:
     return float(np.max(np.abs(samples)) / _rms(samples))
 
 
-def _band_energy(
-    samples: np.ndarray, rate: int, low_hz: float, high_hz: float
-) -> float:
-    windowed = samples * np.hanning(samples.size)
-    spec = np.abs(np.fft.rfft(windowed)) ** 2
-    freqs = np.fft.rfftfreq(samples.size, 1.0 / rate)
+def _spectrum(samples: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    windowed = samples.astype(np.float64) * np.hanning(samples.size)
+    return np.fft.rfftfreq(samples.size, 1.0 / RATE), np.abs(np.fft.rfft(windowed))
+
+
+def _band_energy(samples: np.ndarray, low_hz: float, high_hz: float) -> float:
+    freqs, spec = _spectrum(samples)
     band = (freqs >= low_hz) & (freqs < high_hz)
-    return float(np.mean(spec[band]) + 1e-18)
+    return float(np.mean(spec[band] ** 2) + 1e-18)
+
+
+def _band_db(wet: np.ndarray, dry: np.ndarray, low_hz: float, high_hz: float) -> float:
+    return float(
+        10.0
+        * np.log10(
+            _band_energy(wet, low_hz, high_hz) / _band_energy(dry, low_hz, high_hz)
+        )
+    )
+
+
+def _log_envelope(samples: np.ndarray) -> tuple[np.ndarray, float]:
+    """Cepstrally smoothed log spectrum on a uniform log-frequency grid."""
+    freqs, spec = _spectrum(samples)
+    cep = np.fft.irfft(np.log(spec + 1e-9))
+    lifter = int(RATE / 350.0)
+    cep[lifter:-lifter] = 0.0
+    envelope = np.fft.rfft(cep).real
+    grid = np.linspace(np.log2(150.0), np.log2(8000.0), 480)
+    step_semitones = float((grid[1] - grid[0]) * 12.0)
+    return np.interp(grid, np.log2(freqs[1:]), envelope[1:]), step_semitones
+
+
+def _envelope_shift_semitones(wet: np.ndarray, dry: np.ndarray) -> float:
+    """How far the formant envelope moved, in semitones (best log-f alignment)."""
+    env_wet, step = _log_envelope(wet)
+    env_dry, _ = _log_envelope(dry)
+    best_shift = 0.0
+    best_score = -2.0
+    for k in range(-120, 121):
+        if k >= 0:
+            a, b = env_wet[k:], env_dry[: env_wet.size - k]
+        else:
+            a, b = env_wet[:k], env_dry[-k:]
+        a = a - np.mean(a)
+        b = b - np.mean(b)
+        score = float(np.dot(a, b) / np.sqrt(np.dot(a, a) * np.dot(b, b) + 1e-12))
+        if score > best_score:
+            best_score = score
+            best_shift = k * step
+    return best_shift
+
+
+def _level_delta_db(wet: np.ndarray, dry: np.ndarray) -> float:
+    return _db(active_rms(wet, RATE)) - _db(active_rms(dry, RATE))
 
 
 def _render_with(params: dict[str, float], take: np.ndarray) -> np.ndarray:
@@ -169,49 +242,119 @@ def _render_with(params: dict[str, float], take: np.ndarray) -> np.ndarray:
     return engine.render(take)
 
 
-def test_tonality_bright_vs_dark_moves_spectrum() -> None:
-    engine = DspEngine(prefer_rubband=False)
-    take = _speech_like(0.45, engine.sample_rate)
-    default = _render_with({"tonality": 0.5}, take)
+def _with_gaps(
+    speech: np.ndarray, gap_seconds: float, floor: float = 0.0
+) -> np.ndarray:
+    gap = np.zeros(int(RATE * gap_seconds), dtype=np.float32)
+    take = np.concatenate([gap, speech, gap])
+    if floor > 0.0:
+        hiss = np.random.default_rng(7).standard_normal(take.size) * floor
+        take = (take + hiss).astype(np.float32)
+    return take
+
+
+def test_active_rms_ignores_silence_and_tails() -> None:
+    speech = _vowel(0.4, syllables=False)
+    padded = _with_gaps(speech, 0.8)
+    assert active_rms(padded, RATE) == pytest.approx(active_rms(speech, RATE), rel=0.15)
+    assert active_rms(np.zeros(4800, dtype=np.float32), RATE) == 0.0
+
+
+def test_zero_is_off_for_unipolar_sliders() -> None:
+    take = _vowel(0.3)
+    reference = _render_with({}, take)
+    for key in ("growl", "hollow", "room", "distance", "breath", "gate"):
+        np.testing.assert_allclose(_render_with({key: 0.0}, take), reference, atol=1e-6)
+
+
+def test_body_moves_formants_not_pitch_or_level() -> None:
+    take = _vowel(0.8)
+    dry = _render_with({}, take)
+    chesty = _render_with({"formant_semitones": -8.0}, take)
+    thin = _render_with({"formant_semitones": 8.0}, take)
+    assert _envelope_shift_semitones(chesty, dry) == pytest.approx(-8.0, abs=1.5)
+    assert _envelope_shift_semitones(thin, dry) == pytest.approx(8.0, abs=1.5)
+    assert _envelope_shift_semitones(dry, dry) == pytest.approx(0.0, abs=0.2)
+    for wet in (chesty, thin):
+        assert _estimate_f0(wet, RATE) == pytest.approx(
+            _estimate_f0(dry, RATE), rel=0.05
+        )
+        assert abs(_level_delta_db(wet, dry)) < 1.5
+
+
+def test_body_negative_is_the_mirror_of_positive() -> None:
+    take = _vowel(0.6)
+    dry = _render_with({}, take)
+    chesty = _render_with({"formant_semitones": -8.0}, take)
+    thin = _render_with({"formant_semitones": 8.0}, take)
+    assert _band_db(chesty, dry, 2000.0, 6000.0) < -4.0
+    assert _band_db(thin, dry, 2000.0, 6000.0) > 1.5
+    assert _band_db(chesty, dry, 100.0, 450.0) > _band_db(thin, dry, 100.0, 450.0) + 2.0
+
+
+def test_tonality_is_a_tilt_not_a_volume_knob() -> None:
+    take = _vowel(0.6)
+    dry = _render_with({"tonality": 0.5}, take)
+    np.testing.assert_allclose(dry, _render_with({}, take), atol=1e-6)
     bright = _render_with({"tonality": 0.0}, take)
     dark = _render_with({"tonality": 1.0}, take)
-    high_default = _band_energy(default, engine.sample_rate, 2000.0, 8000.0)
-    high_bright = _band_energy(bright, engine.sample_rate, 2000.0, 8000.0)
-    high_dark = _band_energy(dark, engine.sample_rate, 2000.0, 8000.0)
-    assert high_bright > high_default * 1.35
-    assert high_dark < high_default * 0.75
+    assert _band_db(bright, dry, 2000.0, 8000.0) > 4.0
+    assert _band_db(bright, dry, 80.0, 400.0) < -3.0
+    assert _band_db(dark, dry, 2000.0, 8000.0) < -7.0
+    assert _band_db(dark, dry, 80.0, 400.0) > 1.0
+    assert abs(_level_delta_db(bright, dry)) < 1.0
+    assert abs(_level_delta_db(dark, dry)) < 1.0
+    half_bright = _render_with({"tonality": 0.25}, take)
+    assert (
+        1.0
+        < _band_db(half_bright, dry, 2000.0, 8000.0)
+        < _band_db(bright, dry, 2000.0, 8000.0)
+    )
 
 
-def test_growl_raises_saturation_crest() -> None:
-    engine = DspEngine(prefer_rubband=False)
-    take = _speech_like(0.4, engine.sample_rate)
-    dry = _render_with({"growl": 0.0}, take)
-    wet = _render_with({"growl": 1.0}, take)
-    third_dry = _band_energy(dry, engine.sample_rate, 380.0, 460.0)
-    third_wet = _band_energy(wet, engine.sample_rate, 380.0, 460.0)
-    assert _crest(wet) < _crest(dry) * 0.92
-    assert third_wet > third_dry * 1.25
-    assert float(np.corrcoef(take, wet)[0, 1]) > 0.35
+def test_growl_adds_harmonic_grit_at_matched_level() -> None:
+    t = np.arange(int(RATE * 0.5), dtype=np.float64) / RATE
+    tone = (0.2 * np.sin(2 * np.pi * 150.0 * t)).astype(np.float32)
+    dry = _render_with({}, tone)
+    wet = _render_with({"growl": 1.0}, tone)
+    freqs, spec_dry = _spectrum(dry)
+    _, spec_wet = _spectrum(wet)
+
+    def harmonic_db(spec: np.ndarray, k: int) -> float:
+        fundamental = float(np.max(spec[(freqs > 130.0) & (freqs < 170.0)]))
+        band = (freqs > 150.0 * k - 20.0) & (freqs < 150.0 * k + 20.0)
+        return float(20.0 * np.log10(np.max(spec[band]) / fundamental + 1e-12))
+
+    assert harmonic_db(spec_dry, 2) < -60.0 and harmonic_db(spec_dry, 3) < -60.0
+    assert harmonic_db(spec_wet, 2) > -30.0
+    assert harmonic_db(spec_wet, 3) > -25.0
+    assert abs(_level_delta_db(wet, dry)) < 1.0
+
+    speech = _vowel(0.6)
+    dry_speech = _render_with({}, speech)
+    wet_speech = _render_with({"growl": 1.0}, speech)
+    assert _crest(wet_speech) < _crest(dry_speech) * 0.8
+    assert abs(_level_delta_db(wet_speech, dry_speech)) < 1.0
+    assert float(np.corrcoef(dry_speech, wet_speech)[0, 1]) > 0.6
 
 
-def test_hollow_comb_moves_spectrum() -> None:
-    engine = DspEngine(prefer_rubband=False)
-    take = _speech_like(0.4, engine.sample_rate)
-    dry = _render_with({"hollow": 0.0}, take)
+def test_hollow_is_a_cupped_cavity_not_a_metallic_ring() -> None:
+    take = _vowel(0.6)
+    dry = _render_with({}, take)
     wet = _render_with({"hollow": 1.0}, take)
-    spec_dry = np.abs(np.fft.rfft(dry * np.hanning(dry.size)))
-    spec_wet = np.abs(np.fft.rfft(wet * np.hanning(wet.size)))
-    ripple_dry = float(np.std(np.log(spec_dry + 1e-8)))
-    ripple_wet = float(np.std(np.log(spec_wet + 1e-8)))
-    assert ripple_wet > ripple_dry * 1.08
-    assert _rms(wet - dry) > 0.04
-    assert float(np.corrcoef(take, wet)[0, 1]) > 0.25
+    mild = _render_with({"hollow": 0.5}, take)
+    assert _band_db(wet, dry, 80.0, 400.0) < -5.0
+    assert _band_db(wet, dry, 700.0, 1500.0) > 2.0
+    assert _band_db(wet, dry, 3000.0, 8000.0) < -1.5
+    assert abs(_level_delta_db(wet, dry)) < 1.0
+    assert abs(_level_delta_db(mild, dry)) < 1.0
+    assert _band_db(wet, dry, 80.0, 400.0) < _band_db(mild, dry, 80.0, 400.0) < -1.0
+    assert _estimate_f0(mild, RATE) == pytest.approx(_estimate_f0(dry, RATE), rel=0.05)
 
 
 def test_room_adds_audible_tail() -> None:
-    engine = DspEngine(prefer_rubband=False)
-    speech = _speech_like(0.28, engine.sample_rate)
-    pad = np.zeros(int(engine.sample_rate * 0.22), dtype=np.float32)
+    speech = _vowel(0.3, syllables=False)
+    pad = np.zeros(int(RATE * 0.25), dtype=np.float32)
     take = np.concatenate([speech, pad])
     dry = _render_with({"room": 0.0}, take)
     wet = _render_with({"room": 1.0}, take)
@@ -221,56 +364,82 @@ def test_room_adds_audible_tail() -> None:
     assert float(np.corrcoef(take[: speech.size], wet[: speech.size])[0, 1]) > 0.3
 
 
-def test_distance_darker_and_quieter() -> None:
-    engine = DspEngine(prefer_rubband=False)
-    take = _speech_like(0.4, engine.sample_rate)
-    dry = _render_with({"distance": 0.0}, take)
-    wet = _render_with({"distance": 1.0}, take)
-    high_dry = _band_energy(dry, engine.sample_rate, 1800.0, 7000.0)
-    high_wet = _band_energy(wet, engine.sample_rate, 1800.0, 7000.0)
-    assert _rms(wet) < _rms(dry) * 0.55
-    assert high_wet < high_dry * 0.35
+def test_distance_is_gently_quieter_and_darker() -> None:
+    take = _vowel(0.6)
+    dry = _render_with({}, take)
+    near = _render_with({"distance": 0.25}, take)
+    mid = _render_with({"distance": 0.5}, take)
+    far = _render_with({"distance": 1.0}, take)
+    assert -2.5 < _level_delta_db(near, dry) < -0.3
+    assert -5.5 < _level_delta_db(mid, dry) < -2.0
+    assert -13.0 < _level_delta_db(far, dry) < -7.0
+
+    def balance(audio: np.ndarray) -> float:
+        return _band_energy(audio, 2000.0, 8000.0) / _band_energy(audio, 100.0, 500.0)
+
+    assert balance(near) < balance(dry) * 0.9
+    assert balance(mid) < balance(near)
+    assert balance(far) < balance(mid) * 0.3
 
 
-def test_breath_adds_noise_layer() -> None:
-    engine = DspEngine(prefer_rubband=False)
-    take = _speech_like(0.4, engine.sample_rate)
-    dry = _render_with({"breath": 0.0}, take)
+def test_breath_follows_the_voice_and_leaves_gaps_silent() -> None:
+    speech = _vowel(0.9)
+    take = _with_gaps(speech, 0.4, floor=0.001)
+    dry = _render_with({}, take)
     wet = _render_with({"breath": 1.0}, take)
-    high_dry = _band_energy(dry, engine.sample_rate, 3000.0, 10000.0)
-    high_wet = _band_energy(wet, engine.sample_rate, 3000.0, 10000.0)
-    assert _rms(wet) > _rms(dry) * 1.08
-    assert high_wet > high_dry * 2.0
-    assert float(np.corrcoef(take, wet)[0, 1]) > 0.45
+    gap = slice(0, int(RATE * 0.35))
+    voiced = slice(int(RATE * 0.4), int(RATE * 0.4) + speech.size)
+    assert _band_db(wet[voiced], dry[voiced], 3000.0, 8000.0) > 4.0
+    # No hiss bed: the gap gains nothing (it only drops with the voice's makeup).
+    assert _band_db(wet[gap], dry[gap], 3000.0, 8000.0) < 1.0
+    assert _rms(wet[gap]) <= _rms(dry[gap]) * 1.1
+    assert abs(_level_delta_db(wet, dry)) < 1.5
+    # The air (3 kHz+) rides the syllable envelope rather than sitting under it.
+    spec = np.fft.rfft(wet[voiced].astype(np.float64))
+    spec[np.fft.rfftfreq(speech.size, 1.0 / RATE) < 3000.0] = 0.0
+    air = np.fft.irfft(spec, n=speech.size)
+    frame = int(RATE * 0.02)
+    count = speech.size // frame
+    air_level = np.sqrt(
+        np.mean(air[: count * frame].reshape(count, frame) ** 2, axis=1)
+    )
+    voice_frames = dry[voiced][: count * frame].reshape(count, frame)
+    voice_level = np.sqrt(np.mean(voice_frames**2, axis=1))
+    assert float(np.corrcoef(air_level, voice_level)[0, 1]) > 0.75
+    order = np.argsort(voice_level)
+    quarter = count // 4
+    assert np.mean(air_level[order[-quarter:]]) > 2.2 * np.mean(
+        air_level[order[:quarter]]
+    )
 
 
-def test_gate_silences_quiet_parts_keeps_speech() -> None:
-    engine = DspEngine(prefer_rubband=False)
-    rate = engine.sample_rate
-    silence = np.zeros(int(rate * 0.2), dtype=np.float32)
-    speech = _speech_like(0.3, rate)
-    take = np.concatenate([silence, speech, silence])
-    dry = _render_with({"gate": 0.0}, take)
-    wet = _render_with({"gate": 1.0}, take)
-    quiet = slice(0, silence.size)
-    voiced = slice(silence.size + int(rate * 0.06), silence.size + speech.size)
-    assert _rms(wet[quiet]) < _rms(dry[quiet]) * 0.35 + 0.002
-    assert _rms(wet[quiet]) < 0.012
-    assert _rms(wet[voiced]) > _rms(wet[quiet]) * 8.0
-    assert _rms(wet[voiced]) > _rms(dry[voiced]) * 0.45
+def test_gate_mutes_quiet_parts_and_leaves_speech_untouched() -> None:
+    speech = _vowel(0.9, peak=0.15)
+    take = _with_gaps(speech, 0.6, floor=0.0015)
+    dry = _render_with({}, take)
+    gap = slice(0, int(RATE * 0.55))
+    tail = slice(int(RATE * 0.6) + speech.size + int(RATE * 0.35), None)
+    voiced = slice(
+        int(RATE * 0.6) + int(RATE * 0.05),
+        int(RATE * 0.6) + speech.size - int(RATE * 0.05),
+    )
+    assert _db(_rms(dry[gap])) > -60.0
+    for amount in (0.35, 0.7):
+        wet = _render_with({"gate": amount}, take)
+        assert _db(_rms(wet[gap])) < -75.0
+        assert _db(_rms(wet[tail])) < _db(_rms(dry[tail])) - 12.0
+        assert float(np.corrcoef(dry[voiced], wet[voiced])[0, 1]) > 0.995
+        assert abs(_db(_rms(wet[voiced])) - _db(_rms(dry[voiced]))) < 0.5
 
 
-def test_body_thinner_vs_darker() -> None:
-    engine = DspEngine(prefer_rubband=False)
-    take = _speech_like(0.4, engine.sample_rate)
-    dry = _render_with({"formant_semitones": 0.0}, take)
-    thin = _render_with({"formant_semitones": 12.0}, take)
-    dark = _render_with({"formant_semitones": -12.0}, take)
-
-    def presence(audio: np.ndarray) -> float:
-        high = _band_energy(audio, engine.sample_rate, 1800.0, 6000.0)
-        low = _band_energy(audio, engine.sample_rate, 80.0, 400.0)
-        return high / low
-
-    assert presence(thin) > presence(dry) * 1.25
-    assert presence(dark) < presence(dry) * 0.80
+def test_gate_at_whisper_setting_keeps_a_quiet_voice() -> None:
+    speech = _vowel(0.9, peak=0.08)
+    take = _with_gaps(speech, 0.5, floor=0.0005)
+    dry = _render_with({}, take)
+    wet = _render_with({"gate": 0.35}, take)
+    voiced = slice(
+        int(RATE * 0.5) + int(RATE * 0.05),
+        int(RATE * 0.5) + speech.size - int(RATE * 0.05),
+    )
+    assert float(np.corrcoef(dry[voiced], wet[voiced])[0, 1]) > 0.99
+    assert _db(_rms(wet[: int(RATE * 0.45)])) < -75.0
