@@ -138,14 +138,19 @@ What we learned the hard way:
   (no torch wheels; `transformers` 4.44 drags an old `tokenizers` that tries to compile
   Rust and PyO3 refuses). torch 2.9 + transformers ≥ 4.46 install fine; whether X-VC's
   inference is happy on them is the next thing Michael's box will tell us.
-- X-VC's `utils/log.py` imports `wandb`, `tensorboard` and `matplotlib` at load time and
-  `model.py` imports `audiotools` (descript-audiotools); missing any of them surfaces as
-  hydra's opaque *"Error locating target 'models.codec.sac.model.XVC'"*. The `neural`
-  extra now includes them, and `XvcConverter` pre-imports the model module so the real
-  error and a `pip install` hint appear in the editor and the log.
-- `SoX could not be found` is a warning from descript-audiotools' optional SoX path; it
-  is not needed. `flash-attn is not installed` is Qwen3-TTS choosing the slower
-  attention; also fine.
+- X-VC's `utils/log.py` imports `wandb`, `tensorboard` and `matplotlib` at load time;
+  missing any of them surfaces as hydra's opaque *"Error locating target
+  'models.codec.sac.model.XVC'"*. The `neural` extra includes them, and `XvcConverter`
+  pre-imports the model module so the real error and a `pip install` hint appear in the
+  editor and the log.
+- X-VC's `model.py` also does `from audiotools import AudioSignal`, but only its
+  training losses use it. `descript-audiotools` pins `protobuf<3.20`, which conflicts
+  with `onnxruntime` (qwen-tts), `wandb` and `tensorboard`, so it is **not** in the
+  `neural` extra; `votr.neural_backends.ensure_audiotools_stub()` registers a stand-in
+  module for that one import when the real package is absent. If you had installed
+  descript-audiotools by hand earlier, `pip uninstall descript-audiotools` and let pip
+  put protobuf back where the other packages want it.
+- `flash-attn is not installed` is Qwen3-TTS choosing the slower attention; fine.
 - Qwen3-TTS VoiceDesign generated a clip on the first try (torch 2.9, transformers ≥
   4.46, `qwen-tts` 0.1.1).
 
@@ -154,16 +159,15 @@ What we learned the hard way:
 Working end to end in Preview: `pip install -e ".[neural]"` on Python 3.13 with CUDA
 torch 2.9 and transformers 4.46, both packs downloaded, X-VC converts a recorded Take
 toward a mimic clip, Qwen3-TTS VoiceDesign writes a clip from Tone Hints. The X-VC
-pins (torch 2.5.1 / transformers 4.44.1) are not needed. One extra step was
-`pip install "protobuf>=6.31.1,<8"` after `descript-audiotools` pinned protobuf < 3.20.
+pins (torch 2.5.1 / transformers 4.44.1) are not needed.
 
 ## Remaining
 
 1. **Roleplay Mode** still uses the DSP Engine for Neural Voices (S7.4 next slice).
 2. **Installer** does not carry the runtime; source checkout required.
 3. **Quality and latency numbers** are the publishers'; nothing measured here yet.
-4. `descript-audiotools`' `protobuf<3.20` pin conflicts with everything modern; the
-   `neural` extra now asks for protobuf ≥ 6.31.1 so pip picks the working one.
+4. `descript-audiotools` stays out of the `neural` extra (protobuf conflict); a stand-in
+   module covers X-VC's import. Training X-VC would need it in its own environment.
 
 ## Making a Neural Voice in the editor (mimic clips)
 

@@ -5,6 +5,10 @@ Windows installer artifacts are attached to GitHub Releases on `v*` tags.
 
 ## Unreleased
 
+- `pip install -e ".[neural]"` resolves again: `descript-audiotools` (pins
+  `protobuf<3.20`, training-only for X-VC) and the protobuf floor are out of the
+  extra; a stand-in module covers X-VC's single `audiotools` import.
+
 - Neural: Takes and mimic clips are conditioned the way X-VC expects
   (its `volume_normalize` + 40 Hz high-pass) before conversion, and the output
   is peak-guarded instead of hard-clipped — fixes crackly, too-soft mimics from
