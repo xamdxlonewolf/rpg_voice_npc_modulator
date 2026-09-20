@@ -10,7 +10,7 @@ Status: 2026-09-20 (updated after the GPU slice). Constraints unchanged: free, f
 | --- | --- | --- | --- |
 | Shape *how you sound* (deeper, tiny, gravelly, ghostly, hollow, distant, breathy) | **Yes** | Any CPU | DSP Engine sliders, Tone Tags, **Presets**, **Design from Tone Hints** |
 | Describe a voice in words and get usable sliders | **Yes** (rules, not a model) | Any CPU | **Design from Tone Hints** — offline lexicon → tags + sliders |
-| Sound like a genuinely *different person* | Only with a neural voice converter | **NVIDIA GPU, ≈ 6 GB VRAM**, 300–500 ms latency; CPU ≈ 1–2 s (unusable live) | **`NeuralEngine` (X-VC) in Preview** once the opt-in pack is downloaded; Roleplay not yet wired; unverified on hardware |
+| Sound like a genuinely *different person* | Only with a neural voice converter | **NVIDIA GPU, ≈ 6 GB VRAM**, 300–500 ms latency; CPU ≈ 1–2 s (unusable live) | **`NeuralEngine` (X-VC) in Preview** once the opt-in pack is downloaded — working on Michael's box; Roleplay not yet wired |
 | Describe a person in words and get *that person* | Only with a voice-design TTS feeding a converter | NVIDIA GPU, multi-GB download | **Neural Voice design (Qwen3-TTS VoiceDesign)** when both packs are installed; lexicon fallback otherwise, and it says so |
 | Speak with an **Irish / British accent** in *your* live voice | **No** — see below | — | **Not faked.** Accent words are kept as notes only |
 | A designed character *reading text* in an accent (TTS, not your voice) | Plausible with a local TTS that takes accent prompts | GPU for good ones; small CPU TTS exists | Not shipped; would be a Preview/soundboard feature, not Roleplay |
@@ -149,15 +149,21 @@ What we learned the hard way:
 - Qwen3-TTS VoiceDesign generated a clip on the first try (torch 2.9, transformers ≥
   4.46, `qwen-tts` 0.1.1).
 
-## Remaining blockers for Michael's box
+## Status on Michael's box (2026-09-20)
 
-1. **First successful X-VC load.** Runtime is now installable; the next report will show
-   whether `models.codec.sac.model` imports and `load_xvc` runs on torch 2.9 /
-   transformers ≥ 4.46 with the rewritten yaml. Fixes belong in
-   `votr/neural_backends.py`.
-2. **Roleplay Mode** still uses the DSP Engine for Neural Voices (S7.4 next slice).
-3. **Installer** does not carry the runtime; source checkout required.
-4. **Quality and latency numbers** are the publishers'; nothing measured here yet.
+Working end to end in Preview: `pip install -e ".[neural]"` on Python 3.13 with CUDA
+torch 2.9 and transformers 4.46, both packs downloaded, X-VC converts a recorded Take
+toward a mimic clip, Qwen3-TTS VoiceDesign writes a clip from Tone Hints. The X-VC
+pins (torch 2.5.1 / transformers 4.44.1) are not needed. One extra step was
+`pip install "protobuf>=6.31.1,<8"` after `descript-audiotools` pinned protobuf < 3.20.
+
+## Remaining
+
+1. **Roleplay Mode** still uses the DSP Engine for Neural Voices (S7.4 next slice).
+2. **Installer** does not carry the runtime; source checkout required.
+3. **Quality and latency numbers** are the publishers'; nothing measured here yet.
+4. `descript-audiotools`' `protobuf<3.20` pin conflicts with everything modern; the
+   `neural` extra now asks for protobuf ≥ 6.31.1 so pip picks the working one.
 
 ## Making a Neural Voice in the editor (mimic clips)
 

@@ -162,9 +162,11 @@ CONVERSION_PACK = ModelPack(
         "Apache-2.0.",
     ),
     caveats=(
-        "Also needs a CUDA build of PyTorch 2.5 and X-VC's Python dependencies, "
-        "which this downloader does not install (see docs/neural-voice.md).",
-        "Unverified on real hardware by the project so far.",
+        "Also needs CUDA PyTorch and X-VC's Python dependencies, which this "
+        'downloader does not install: pip install -e ".[neural]" (see '
+        "docs/neural-voice.md).",
+        "Verified converting speech on Windows 11 / Python 3.13 / torch 2.9 / "
+        "transformers 4.46 (2026-09-20).",
     ),
 )
 
@@ -208,7 +210,8 @@ VOICE_DESIGN_PACK = ModelPack(
     licences=("Qwen3-TTS-12Hz-1.7B-VoiceDesign (Qwen): Apache-2.0.",),
     caveats=(
         "Also needs the `qwen-tts` Python package (Apache-2.0) and CUDA PyTorch.",
-        "Unverified on real hardware by the project so far.",
+        "Verified generating a reference clip on Windows 11 / Python 3.13 / "
+        "torch 2.9 (2026-09-20).",
     ),
 )
 
