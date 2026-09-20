@@ -4,34 +4,38 @@ Date: 2026-09-20. **Windows size and cold-start are not measured.**
 
 ## Planned check
 
-Build `--onedir` collecting `rubband`, `pedalboard`, PySide6, `python-stretch`,
-and `sounddevice` (PortAudio DLL). Record installer-folder size and cold-start
-to the empty window on Windows 10/11.
+Build `--onedir` collecting `rubband` (optional), `pedalboard`, PySide6 plugins
+(not Addons), `python-stretch`, and `sounddevice` (PortAudio DLL). Record
+installer-folder size and cold-start to the empty window on Windows 10/11.
 
-Helper: `python scripts/build_bundle.py`.
+Helpers:
+
+- `packaging/VoiceOfTheRealm.spec`
+- `python scripts/build_bundle.py`
+- `python scripts/smoke_headless.py` (and `--frozen` after a build)
+- `installer/votr.iss` (per-user Inno Setup; version from `pyproject.toml`)
 
 ## Linux cloud VM (honest, not a Windows result)
 
-`python scripts/build_bundle.py` succeeded here (`PyInstaller --onedir
---collect-all PySide6`).
+An earlier `PyInstaller --collect-all PySide6` smoke on this VM produced
+`dist/VoiceOfTheRealm` at **722 MB**. That figure is **Linux-only** and is
+why the E6 spec does **not** use `--collect-all PySide6`.
 
-| Fact | Linux VM only |
-| --- | --- |
-| `dist/VoiceOfTheRealm` size | **722 MB** (`--collect-all PySide6` pulls Addons; too fat to ship) |
-| `VoiceOfTheRealm --headless` | exit 0 in **0.19 s** (offscreen Qt, not a user double-click) |
+Do **not** copy 722 MB or the old 0.19 s `--headless` time into a Windows
+estimate. Windows bundle size and cold-start have not been measured.
 
-Do **not** copy 722 MB or 0.19 s into a Windows estimate. The next Windows
-build should collect `PySide6` essentials only (not Addons).
-
-- `rubband` has **no Windows wheel**; a Windows bundle cannot collect it via
-  `pip` until we vendor a wheel (see `docs/spikes/pitch-core.md`).
+- `rubband` has **no published Windows wheel**; the first Windows installer
+  should ship `python-stretch` and collect Rubber Band only if a wheel or
+  vendored binary is present (see `docs/spikes/pitch-core.md`).
 
 ## Blocked on Windows
 
-- Bundle size with `rubband` + `pedalboard` + PySide6.
-- Cold-start time to "Voice of the Realm".
-- Whether the `rubband` native DLL is present after `collect_all`.
+- Bundle size with `rubband` + `pedalboard` + PySide6 on Windows 10/11.
+- Cold-start time to "Voice of the Realm" after a user double-click.
+- Whether a `rubband` native DLL is present after collect.
+- Inno Setup compile (`iscc`) — not installed on this Linux VM.
+- S6.4 clean-machine acceptance (see `docs/spikes/acceptance-rough-draft.md`).
 
-Re-run `scripts/build_bundle.py` on a Windows 10/11 machine with the S1.2
-deps installed. If `rubband` still has no wheel, the first installer should
-ship `python-stretch` and treat Rubber Band as an optional collected binary.
+Re-run `python scripts/build_bundle.py` then `iscc installer/votr.iss` on a
+Windows 10/11 machine. GitHub Actions on a `v*` tag uses `windows-latest` for
+that path.

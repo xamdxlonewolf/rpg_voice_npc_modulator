@@ -3,9 +3,11 @@
 A free, local desktop app for a tabletop Game Master who plays online: create
 character Voices, preview them, and speak through the selected Voice into Discord.
 
-This repository is at the S0.1 scaffold — packaging, tests, and an empty window.
 Product decisions live in [`docs/`](docs/project-context.md). The app is GPL-3.0;
 see [`LICENSE`](LICENSE) and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+Windows packaging lives in `packaging/VoiceOfTheRealm.spec` and
+`installer/votr.iss`. The installer is built on a `v*` tag (GitHub Actions,
+`windows-latest`). Virtual Cable drivers are never bundled.
 
 ## Requirements
 
