@@ -27,7 +27,19 @@ from votr.clips import (
     CLIP_SAMPLE_RATE,
     IMPORT_EXTENSIONS,
     MAX_CLIP_SECONDS,
+    ORIGIN_RECORDED,
     ClipError,
+)
+from votr.loopback import (
+    RECORD_MODE_MIC,
+    RECORD_MODE_PLAYBACK,
+    CapturePlan,
+    frames_to_mono,
+    list_playback_targets,
+    open_capture,
+    plan_capture,
+    playback_capture_available,
+    playback_unavailable_reason,
 )
 from votr.preview import input_devices, play_on_speakers, stop_playback
 from votr.session import Session
@@ -42,6 +54,8 @@ class MimicClipPanel(QGroupBox):
         super().__init__("Mimic clip — the voice to sound like", parent)
         self.session = session
         self._recording = False
+        self._record_mode = RECORD_MODE_MIC
+        self._record_origin = ORIGIN_RECORDED
         self._chunks: list[np.ndarray] = []
         self._stream = None
         self._elapsed = 0.0
@@ -54,7 +68,8 @@ class MimicClipPanel(QGroupBox):
     def _build(self) -> None:
         root = QVBoxLayout(self)
         hint = QLabel(
-            "5–10 seconds of clear speech from the voice you want. Record it, or "
+            "5–10 seconds of clear speech from the voice you want. Record the mic, "
+            "Record what's playing (the video's audio from your speakers), or "
             "upload a WAV/FLAC/MP3. Clips live in your data folder; one clip can "
             "serve many Voices."
         )
@@ -86,13 +101,35 @@ class MimicClipPanel(QGroupBox):
         self.record_button.setObjectName("clip_record")
         self.record_button.setCheckable(True)
         self.record_button.clicked.connect(self._toggle_record)
+        self.playback_button = QPushButton("Record what's playing")
+        self.playback_button.setObjectName("clip_record_playback")
+        self.playback_button.setCheckable(True)
+        self.playback_button.clicked.connect(self._toggle_playback)
         rename = QPushButton("Rename…")
         rename.clicked.connect(self._rename_dialog)
         delete = QPushButton("Delete")
         delete.clicked.connect(self._delete_dialog)
-        for button in (upload, self.record_button, rename, delete):
+        for button in (
+            upload,
+            self.record_button,
+            self.playback_button,
+            rename,
+            delete,
+        ):
             actions.addWidget(button)
         root.addLayout(actions)
+
+        play_row = QHBoxLayout()
+        self.playback_device_label = QLabel("Playback device")
+        self.playback_device_box = QComboBox()
+        self.playback_device_box.setObjectName("clip_playback_device")
+        self.playback_device_box.setToolTip(
+            "The speakers or headphones the video is playing through — not the mic."
+        )
+        play_row.addWidget(self.playback_device_label)
+        play_row.addWidget(self.playback_device_box, 1)
+        root.addLayout(play_row)
+        self._refresh_playback_ui()
 
         self.progress = QProgressBar()
         self.progress.setRange(0, int(MAX_CLIP_SECONDS * 10))
@@ -116,7 +153,9 @@ class MimicClipPanel(QGroupBox):
         self.clip_box.clear()
         clips = self.session.clips.list()
         if not clips:
-            self.clip_box.addItem("No clips yet — record or upload one", "")
+            self.clip_box.addItem(
+                "No clips yet — record, record what's playing, or upload one", ""
+            )
         for clip in clips:
             self.clip_box.addItem(clip.label, clip.id)
         index = self.clip_box.findData(wanted) if wanted else -1
@@ -135,6 +174,8 @@ class MimicClipPanel(QGroupBox):
             self.status.setText("Pick a clip, Play it to check, then “Use this clip”.")
         else:
             self.status.setText("This Voice has no mimic clip yet.")
+        if not self._recording:
+            self._refresh_playback_ui()
 
     def _on_pick(self, _index: int) -> None:
         clip = (
@@ -199,52 +240,133 @@ class MimicClipPanel(QGroupBox):
 
     def _toggle_record(self, checked: bool) -> None:
         if checked:
-            self.start_recording()
+            self.start_recording(RECORD_MODE_MIC)
         else:
             self.stop_recording()
 
-    def start_recording(self) -> bool:
+    def _toggle_playback(self, checked: bool) -> None:
+        if checked:
+            self.start_recording(RECORD_MODE_PLAYBACK)
+        else:
+            self.stop_recording()
+
+    def selected_playback_device(self) -> str:
+        return str(self.playback_device_box.currentData() or "")
+
+    def _refresh_playback_ui(self) -> None:
+        reason = playback_unavailable_reason()
+        available = reason == ""
+        self.playback_button.setEnabled(available and not self._recording)
+        if available:
+            self.playback_button.setToolTip(
+                "Record the audio that's playing on the selected playback device, "
+                "not the microphone."
+            )
+        else:
+            self.playback_button.setToolTip(reason)
+        self.playback_device_label.setVisible(available)
+        self.playback_device_box.setVisible(available)
+        self.playback_device_box.setEnabled(available and not self._recording)
+        if available:
+            self._fill_playback_devices()
+
+    def _fill_playback_devices(self) -> None:
+        current = self.selected_playback_device()
+        preferred = current or self.session.settings.speaker_name
+        self.playback_device_box.blockSignals(True)
+        self.playback_device_box.clear()
+        for device in list_playback_targets():
+            name = str(device.get("name", ""))
+            self.playback_device_box.addItem(name, name)
+        index = self.playback_device_box.findData(preferred) if preferred else -1
+        if index < 0 and preferred:
+            for i in range(self.playback_device_box.count()):
+                label = str(self.playback_device_box.itemData(i) or "").lower()
+                if preferred.lower() in label:
+                    index = i
+                    break
+        if index >= 0:
+            self.playback_device_box.setCurrentIndex(index)
+        self.playback_device_box.blockSignals(False)
+
+    def start_recording(self, mode: str = RECORD_MODE_MIC) -> bool:
         if self._recording:
             return True
-        if not input_devices():
+        if mode == RECORD_MODE_MIC and not input_devices():
             self.status.setText("No microphone found — upload a clip instead.")
             self.record_button.setChecked(False)
             return False
+        if mode == RECORD_MODE_PLAYBACK and not playback_capture_available():
+            reason = playback_unavailable_reason()
+            self.status.setText(reason)
+            self.playback_button.setChecked(False)
+            return False
         self._chunks = []
         self._elapsed = 0.0
+        self._record_mode = mode
         try:
-            import sounddevice as sd
+            plan = self._plan_for_mode(mode)
 
             def callback(indata, frames, time_info, status) -> None:
-                self._chunks.append(indata[:, 0].copy())
+                self._chunks.append(frames_to_mono(indata))
 
-            self._stream = sd.InputStream(
-                samplerate=CLIP_SAMPLE_RATE,
-                channels=1,
-                dtype="float32",
-                callback=callback,
-            )
+            self._stream = open_capture(plan, callback, CLIP_SAMPLE_RATE)
+            self._record_origin = plan.origin
             self._stream.start()
         except Exception as exc:  # noqa: BLE001 — device errors are user-facing
             self._stream = None
-            self.status.setText(f"Could not open the microphone: {exc}")
-            self.record_button.setChecked(False)
+            self._idle_record_buttons()
+            if mode == RECORD_MODE_PLAYBACK:
+                self.status.setText(
+                    f"Could not capture what's playing: {exc}. The microphone "
+                    "was not used."
+                )
+            else:
+                self.status.setText(f"Could not open the microphone: {exc}")
             return False
         self._recording = True
-        self.record_button.setChecked(True)
-        self.record_button.setText("Stop")
+        if mode == RECORD_MODE_PLAYBACK:
+            self.playback_button.setChecked(True)
+            self.playback_button.setText("Stop")
+            self.record_button.setEnabled(False)
+        else:
+            self.record_button.setChecked(True)
+            self.record_button.setText("Stop")
+            self.playback_button.setEnabled(False)
+        self.playback_device_box.setEnabled(False)
         self.progress.setValue(0)
         self.progress.setVisible(True)
         self._tick.start()
         self._show_remaining()
         return True
 
+    def _plan_for_mode(self, mode: str) -> CapturePlan:
+        return plan_capture(
+            mode,
+            preferred_playback=self.selected_playback_device(),
+            preferred_mic=self.session.settings.mic_name,
+        )
+
+    def _idle_record_buttons(self) -> None:
+        self.record_button.setChecked(False)
+        self.record_button.setText(f"Record ({MAX_CLIP_SECONDS:.0f} s max)")
+        self.record_button.setEnabled(True)
+        self.playback_button.setChecked(False)
+        self.playback_button.setText("Record what's playing")
+        self._refresh_playback_ui()
+
     def _show_remaining(self) -> None:
         remaining = max(0.0, MAX_CLIP_SECONDS - self._elapsed)
         self.progress.setValue(int(self._elapsed * 10))
-        self.status.setText(
-            f"Recording… {remaining:.0f} s left. Speak as the character."
-        )
+        if self._record_mode == RECORD_MODE_PLAYBACK:
+            self.status.setText(
+                f"Recording what's playing… {remaining:.0f} s left. Leave the "
+                "video playing."
+            )
+        else:
+            self.status.setText(
+                f"Recording… {remaining:.0f} s left. Speak as the character."
+            )
 
     def _on_tick(self) -> None:
         self._elapsed += self._tick.interval() / 1000.0
@@ -259,8 +381,7 @@ class MimicClipPanel(QGroupBox):
             return False
         self._recording = False
         self._tick.stop()
-        self.record_button.setChecked(False)
-        self.record_button.setText(f"Record ({MAX_CLIP_SECONDS:.0f} s max)")
+        self._idle_record_buttons()
         self.progress.setVisible(False)
         if self._stream is not None:
             try:
@@ -272,16 +393,24 @@ class MimicClipPanel(QGroupBox):
         audio = (
             np.concatenate(self._chunks) if self._chunks else np.zeros(0, np.float32)
         )
-        return self.save_recording(audio, name)
+        return self.save_recording(audio, name, origin=self._record_origin)
 
-    def save_recording(self, audio: np.ndarray, name: str | None = None) -> bool:
+    def save_recording(
+        self,
+        audio: np.ndarray,
+        name: str | None = None,
+        *,
+        origin: str = ORIGIN_RECORDED,
+    ) -> bool:
         if name is None:
             name, ok = QInputDialog.getText(self, "Name this mimic clip", "Name")
             if not ok:
                 self.status.setText("Recording discarded.")
                 return False
         try:
-            clip = self.session.clips.add(audio, CLIP_SAMPLE_RATE, name or "Mimic clip")
+            clip = self.session.clips.add(
+                audio, CLIP_SAMPLE_RATE, name or "Mimic clip", origin=origin
+            )
         except ClipError as exc:
             self.status.setText(str(exc))
             return False

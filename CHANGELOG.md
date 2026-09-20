@@ -5,6 +5,12 @@ Windows installer artifacts are attached to GitHub Releases on `v*` tags.
 
 ## Unreleased
 
+- Mimic clip panel: **Record what's playing** captures the video's audio from
+  the Windows playback device (WASAPI loopback / default output), not the
+  microphone. Same 30 s cap, countdown, name/save/use, Play, and level
+  warning. Device picker when loopback is available; honest disabled label
+  when it isn't. Upload is unchanged.
+
 - Neural: the `audiotools` stand-in is now constructible (X-VC builds
   `STFTParams` while instantiating the model even for inference), and the
   runtime yaml drops `loss_config`, so the Engine starts again without
