@@ -30,7 +30,8 @@ def test_inno_is_per_user_and_shows_gpl() -> None:
 def test_spec_is_onedir_without_collect_all() -> None:
     spec = (ROOT / "packaging" / "VoiceOfTheRealm.spec").read_text(encoding="utf-8")
     assert "COLLECT" in spec
-    assert "collect-all" not in spec
+    assert "--collect-all" not in spec
+    assert "collect_all(" not in spec
     assert "votr/assets" in spec
     assert "sounddevice" in spec
     assert "pedalboard" in spec
