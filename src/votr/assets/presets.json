@@ -2,20 +2,25 @@
   {
     "name": "Orc Warchief",
     "description": "Gravel and chest; barks orders across a war camp.",
-    "tone_tags": ["gravelly", "booming"],
+    "tone_tags": [
+      "gravelly",
+      "booming"
+    ],
     "colour": "#7a3b2e",
     "params": {
       "pitch_semitones": -4.0,
-      "formant_semitones": -3.0,
-      "tonality": 0.6,
-      "growl": 0.5,
-      "room": 0.2
+      "formant_semitones": -2.5,
+      "tonality": 0.58,
+      "growl": 0.35,
+      "room": 0.15
     }
   },
   {
     "name": "Ancient Crone",
     "description": "Thin, dry, a little short of breath.",
-    "tone_tags": ["frail"],
+    "tone_tags": [
+      "frail"
+    ],
     "colour": "#6b6b4a",
     "params": {
       "pitch_semitones": 3.0,
@@ -29,20 +34,24 @@
   {
     "name": "Cave Troll",
     "description": "Huge body, slow and dark, under a stone roof.",
-    "tone_tags": ["giant"],
+    "tone_tags": [
+      "giant"
+    ],
     "colour": "#3f5a3a",
     "params": {
-      "pitch_semitones": -7.0,
-      "formant_semitones": -6.0,
-      "tonality": 0.7,
-      "growl": 0.25,
-      "room": 0.3
+      "pitch_semitones": -6.0,
+      "formant_semitones": -4.0,
+      "tonality": 0.65,
+      "growl": 0.18,
+      "room": 0.25
     }
   },
   {
     "name": "Pixie",
     "description": "Tiny and bright, all sparkle.",
-    "tone_tags": ["tiny"],
+    "tone_tags": [
+      "tiny"
+    ],
     "colour": "#c46bb0",
     "params": {
       "pitch_semitones": 7.0,
@@ -53,7 +62,9 @@
   {
     "name": "Restless Ghost",
     "description": "Airy, a little hollow, drifting at the edge of the room.",
-    "tone_tags": ["ghostly"],
+    "tone_tags": [
+      "ghostly"
+    ],
     "colour": "#5f7d9c",
     "params": {
       "pitch_semitones": 2.0,
@@ -66,19 +77,23 @@
   {
     "name": "Clockwork Automaton",
     "description": "Cupped and metallic-bright, no room at all.",
-    "tone_tags": ["robotic"],
+    "tone_tags": [
+      "robotic"
+    ],
     "colour": "#8a7a3d",
     "params": {
-      "hollow": 0.7,
-      "tonality": 0.2,
-      "growl": 0.15,
+      "hollow": 0.55,
+      "tonality": 0.25,
+      "growl": 0.12,
       "room": 0.0
     }
   },
   {
     "name": "Court Herald",
     "description": "Rounded and proud, announcing into a hall.",
-    "tone_tags": ["regal"],
+    "tone_tags": [
+      "regal"
+    ],
     "colour": "#5c4d7a",
     "params": {
       "pitch_semitones": -1.0,
@@ -89,7 +104,10 @@
   {
     "name": "Shadow Whisperer",
     "description": "Close, hushed, breathy; gaps go silent.",
-    "tone_tags": ["whisper", "sly"],
+    "tone_tags": [
+      "whisper",
+      "sly"
+    ],
     "colour": "#3c3c4f",
     "params": {
       "pitch_semitones": 1.0,
@@ -101,21 +119,27 @@
   {
     "name": "Elder Dragon",
     "description": "Vast chest, smoke in the throat, a cavern behind it.",
-    "tone_tags": ["giant", "gravelly"],
+    "tone_tags": [
+      "giant",
+      "gravelly"
+    ],
     "colour": "#8c2f2f",
     "params": {
-      "pitch_semitones": -9.0,
-      "formant_semitones": -8.0,
-      "tonality": 0.7,
-      "growl": 0.6,
-      "hollow": 0.2,
-      "room": 0.4
+      "pitch_semitones": -7.0,
+      "formant_semitones": -5.0,
+      "tonality": 0.65,
+      "growl": 0.4,
+      "hollow": 0.15,
+      "room": 0.3
     }
   },
   {
     "name": "Kobold Scout",
     "description": "Small, quick and a bit yappy.",
-    "tone_tags": ["tiny", "nasal"],
+    "tone_tags": [
+      "tiny",
+      "nasal"
+    ],
     "colour": "#9a6a2f",
     "params": {
       "pitch_semitones": 5.0,
@@ -127,24 +151,29 @@
   {
     "name": "Lich",
     "description": "Dry, hollow, ancient; speaks from inside a tomb.",
-    "tone_tags": ["ghostly", "hollow"],
+    "tone_tags": [
+      "ghostly",
+      "hollow"
+    ],
     "colour": "#4a5a4a",
     "params": {
       "pitch_semitones": -3.0,
-      "hollow": 0.4,
-      "breath": 0.3,
-      "room": 0.35,
-      "tonality": 0.65
+      "hollow": 0.3,
+      "breath": 0.25,
+      "room": 0.3,
+      "tonality": 0.62
     }
   },
   {
     "name": "Through a Helmet",
     "description": "Your own voice, cupped inside a visor.",
-    "tone_tags": ["hollow"],
+    "tone_tags": [
+      "hollow"
+    ],
     "colour": "#5a6a7a",
     "params": {
-      "hollow": 0.5,
-      "distance": 0.2,
+      "hollow": 0.4,
+      "distance": 0.15,
       "tonality": 0.55
     }
   }

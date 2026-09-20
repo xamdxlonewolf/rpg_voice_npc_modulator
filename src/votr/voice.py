@@ -21,6 +21,7 @@ _KNOWN = (
     "params",
     "colour",
     "icon",
+    "preset",
     "created",
     "updated",
     "last_used",
@@ -41,6 +42,7 @@ class Voice:
     params: dict[str, Any] = field(default_factory=dict)
     colour: str = "#5c4d7a"
     icon: str = ""
+    preset: str = ""
     created: str = ""
     updated: str = ""
     last_used: str = ""
@@ -74,6 +76,7 @@ class Voice:
             params=dict(params),
             colour=str(data.get("colour") or "#5c4d7a"),
             icon=str(data.get("icon") or ""),
+            preset=str(data.get("preset") or ""),
             created=str(data.get("created") or _now()),
             updated=str(data.get("updated") or _now()),
             last_used=str(data.get("last_used") or ""),
@@ -90,6 +93,7 @@ class Voice:
             "params": dict(self.params),
             "colour": self.colour,
             "icon": self.icon,
+            "preset": self.preset,
             "created": self.created,
             "updated": self.updated,
             "last_used": self.last_used,

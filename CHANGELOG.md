@@ -5,6 +5,12 @@ Windows installer artifacts are attached to GitHub Releases on `v*` tags.
 
 ## Unreleased
 
+- Presets: a Voice saved from a preset now remembers it (`preset` field), so
+  choosing that preset again opens your saved Voice instead of a new bundled
+  copy; "Fresh copy" starts over from the bundled recipe under a new name.
+  Orc Warchief, Cave Troll, Elder Dragon, Lich, Through a Helmet and Clockwork
+  Automaton toned down.
+
 - E7 first slice: twelve bundled Voice **Presets** ("Use preset" in the editor),
   **Design from Tone Hints** (offline word lexicon → Tone Tags + sliders, reports
   what it heard, notes accent / "sound like" requests instead of faking them),

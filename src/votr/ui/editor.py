@@ -48,19 +48,20 @@ class VoiceEditor(QWidget):
         self.preset_box.addItem("Start from a preset…", "")
         for preset in self.session.presets:
             self.preset_box.addItem(preset.name, preset.name)
-            self.preset_box.setItemData(
-                self.preset_box.count() - 1,
-                preset.description,
-                Qt.ItemDataRole.ToolTipRole,
-            )
+        self._refresh_preset_labels()
         self.preset_box.setToolTip(
-            "Named slider recipes plus Tone Tags. Loads a new, unsaved draft you "
-            "can Preview and tune."
+            "Named slider recipes plus Tone Tags. If you already saved a Voice from "
+            "a preset, Use preset opens that saved Voice; Fresh copy starts again "
+            "from the bundled recipe."
         )
         use_preset = QPushButton("Use preset")
-        use_preset.clicked.connect(self._use_preset)
+        use_preset.clicked.connect(lambda _=False: self._use_preset())
+        fresh_copy = QPushButton("Fresh copy")
+        fresh_copy.setToolTip("New unsaved draft from the bundled recipe.")
+        fresh_copy.clicked.connect(self._fresh_preset)
         preset_row.addWidget(self.preset_box, 1)
         preset_row.addWidget(use_preset)
+        preset_row.addWidget(fresh_copy)
         root.addLayout(preset_row)
 
         form = QFormLayout()
@@ -156,6 +157,7 @@ class VoiceEditor(QWidget):
 
     def reload_from_draft(self) -> None:
         self._loading = True
+        self._refresh_preset_labels()
         draft = self.session.draft
         self.name_edit.setText(draft.name)
         self.hints_edit.setPlainText(draft.tone_hints)
@@ -208,15 +210,42 @@ class VoiceEditor(QWidget):
         self.session.apply_tag(tag)
         self.reload_from_draft()
 
-    def _use_preset(self) -> None:
+    def _refresh_preset_labels(self) -> None:
+        for index in range(1, self.preset_box.count()):
+            name = str(self.preset_box.itemData(index) or "")
+            preset = next((p for p in self.session.presets if p.name == name), None)
+            if preset is None:
+                continue
+            saved = self.session.saved_voice_for_preset(name)
+            label = f"{name} — saved as “{saved.name}”" if saved else name
+            self.preset_box.setItemText(index, label)
+            tip = preset.description
+            if saved:
+                tip += " Use preset opens your saved Voice; Fresh copy starts over."
+            self.preset_box.setItemData(index, tip, Qt.ItemDataRole.ToolTipRole)
+
+    def _use_preset(self, *, fresh: bool = False) -> None:
         name = str(self.preset_box.currentData() or "")
         if not name or not self.confirm_discard():
             return
-        if self.session.edit_from_preset(name) is None:
+        voice = self.session.edit_from_preset(name, fresh=fresh)
+        if voice is None:
             return
-        self.design_status.setText(f"Preset “{name}” loaded — Preview, then Save.")
+        if self.session.is_dirty():
+            self.design_status.setText(
+                f"New draft “{voice.name}” from the bundled “{name}” recipe — "
+                "Preview, tune, then Save."
+            )
+        else:
+            self.design_status.setText(
+                f"Opened your saved “{voice.name}” (from “{name}”). Edits you Save "
+                "stay; Fresh copy starts again from the bundled recipe."
+            )
         self.reload_from_draft()
         self.preview.schedule_replay()
+
+    def _fresh_preset(self) -> None:
+        self._use_preset(fresh=True)
 
     def design_from_hints(self) -> None:
         prompt = self.hints_edit.toPlainText()

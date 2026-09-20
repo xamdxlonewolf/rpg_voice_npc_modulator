@@ -67,6 +67,23 @@ def test_editor_preset_and_design_buttons(tmp_path: Path) -> None:
     assert session.engine.params()["pitch_semitones"] == pytest.approx(7.0)
     assert "Pixie" in editor.design_status.text()
 
+    # Tune, Save, then pick the preset again: the saved Voice comes back.
+    editor._sliders["pitch_semitones"].setValue(500)
+    editor.save()
+    window.show_editor(session.voices[0].id)
+    assert session.draft.params["pitch_semitones"] == pytest.approx(0.0)
+    editor.preset_box.setCurrentIndex(editor.preset_box.findData("Pixie"))
+    assert "saved" in editor.preset_box.currentText()
+    editor._use_preset()
+    assert editor.name_edit.text() == "Pixie"
+    assert session.engine.params()["pitch_semitones"] == pytest.approx(0.0)
+    assert "saved" in editor.design_status.text()
+    editor._fresh_preset()
+    assert editor.name_edit.text() == "Pixie 2"
+    assert session.engine.params()["pitch_semitones"] == pytest.approx(7.0)
+    session.edit_new()
+    editor.reload_from_draft()
+
     editor.hints_edit.setPlainText("a whispering Irish ghost")
     editor.design_from_hints()
     assert "ghostly" in session.draft.tone_tags

@@ -118,12 +118,43 @@ class Session:
         defaults = {spec.key: spec.default for spec in self.engine.parameter_schema()}
         self.engine.set_params(defaults)
 
-    def edit_from_preset(self, name: str) -> Voice | None:
-        """Start a new, unsaved draft from a bundled preset."""
+    def saved_voice_for_preset(self, name: str) -> Voice | None:
+        """The GM's most recently saved Voice made from this preset, if any."""
+        wanted = name.strip().lower()
+        matches = [
+            voice
+            for voice in self.voices
+            if voice.preset.lower() == wanted and self.engine_installed(voice.engine_id)
+        ]
+        if not matches:
+            return None
+        return max(matches, key=lambda voice: (voice.updated, voice.created))
+
+    def unique_voice_name(self, name: str) -> str:
+        taken = {voice.name.lower() for voice in self.voices}
+        if name.lower() not in taken:
+            return name
+        number = 2
+        while f"{name} {number}".lower() in taken:
+            number += 1
+        return f"{name} {number}"
+
+    def edit_from_preset(self, name: str, *, fresh: bool = False) -> Voice | None:
+        """Open a preset: the GM's saved Voice for it wins; else a new draft.
+
+        ``fresh=True`` always starts a new unsaved draft from the bundled recipe,
+        named so it does not collide with a saved Voice.
+        """
         preset = preset_by_name(self.presets, name)
         if preset is None:
             return None
+        if not fresh:
+            saved = self.saved_voice_for_preset(preset.name)
+            if saved is not None:
+                self.edit(saved)
+                return self.draft
         self.draft = voice_from_preset(preset)
+        self.draft.name = self.unique_voice_name(preset.name)
         self._saved = Voice.new().to_dict()
         self.apply_draft_to_engine()
         return self.draft
