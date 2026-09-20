@@ -32,7 +32,42 @@ def query_devices() -> list[dict[str, Any]]:
         devices = sd.query_devices()
     except Exception:
         return []
-    return [dict(dev) for dev in devices]
+    result = []
+    for index, dev in enumerate(devices):
+        item = dict(dev)
+        item.setdefault("index", index)
+        result.append(item)
+    return result
+
+
+class BlockRing:
+    """Single-producer / single-consumer block ring for the Monitor."""
+
+    def __init__(self, block_size: int, slots: int = 16) -> None:
+        self.blocks = np.zeros((slots, block_size), dtype=np.float32)
+        self.block_size = block_size
+        self.slots = slots
+        self._write = 0
+        self._read = 0
+
+    def push(self, block: np.ndarray) -> None:
+        slot = self._write % self.slots
+        count = min(block.size, self.block_size)
+        self.blocks[slot, :count] = block[:count]
+        if count < self.block_size:
+            self.blocks[slot, count:] = 0
+        self._write += 1
+        unread = self._write - self._read
+        if unread > self.slots:
+            self._read = self._write - self.slots
+
+    def pop(self, dest: np.ndarray) -> bool:
+        if self._read >= self._write:
+            dest.fill(0)
+            return False
+        dest[:] = self.blocks[self._read % self.slots]
+        self._read += 1
+        return True
 
 
 class DuplexStream:
@@ -56,7 +91,28 @@ class DuplexStream:
         self._started = threading.Event()
         self._error: BaseException | None = None
         self.xruns = 0
+        self.underruns = 0
+        self.overruns = 0
         self.callbacks = 0
+        self.muted = False
+        self.hold_to_talk = False
+        self.talk_held = False
+        self.input_peak = 0.0
+        self.output_peak = 0.0
+        self.lost = False
+        self.monitor_ring: BlockRing | None = None
+
+    def is_muted(self) -> bool:
+        return self.muted or (self.hold_to_talk and not self.talk_held)
+
+    @property
+    def running(self) -> bool:
+        return (
+            self._thread is not None
+            and self._thread.is_alive()
+            and not self.lost
+            and not self._stop.is_set()
+        )
 
     def callback(
         self,
@@ -70,12 +126,24 @@ class DuplexStream:
         outdata.fill(0)
         if status:
             self.xruns += 1
+            if getattr(status, "input_overflow", False):
+                self.overruns += 1
+            if getattr(status, "output_underflow", False):
+                self.underruns += 1
         if frames != self.engine.block_size:
             return
         self._in[:] = indata[:, 0]
+        self.input_peak = float(np.max(np.abs(self._in)))
         processed = self.engine.process_block(self._in)
-        n = min(processed.size, outdata.shape[0])
-        outdata[:n, 0] = processed[:n]
+        if self.is_muted():
+            self.output_peak = 0.0
+            self.callbacks += 1
+            return
+        count = min(processed.size, outdata.shape[0])
+        outdata[:count, 0] = processed[:count]
+        self.output_peak = float(np.max(np.abs(outdata[:count, 0])))
+        if self.monitor_ring is not None:
+            self.monitor_ring.push(processed[:count])
         self.callbacks += 1
 
     def start(self) -> None:
@@ -84,6 +152,7 @@ class DuplexStream:
         self._stop.clear()
         self._started.clear()
         self._error = None
+        self.lost = False
         self._thread = threading.Thread(
             target=self._run, name="votr-audio", daemon=True
         )
@@ -116,9 +185,13 @@ class DuplexStream:
             )
             stream.start()
             self._started.set()
-            self._stop.wait()
+            while not self._stop.wait(timeout=0.25):
+                if not stream.active:
+                    self.lost = True
+                    break
             stream.stop()
             stream.close()
         except BaseException as exc:  # noqa: BLE001 — surface to start()
             self._error = exc
+            self.lost = True
             self._started.set()

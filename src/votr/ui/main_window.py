@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import QLabel, QMainWindow, QStackedWidget, QVBoxLayout, QWidget
 
 from votr import WINDOW_TITLE
@@ -12,6 +14,7 @@ from votr.session import Session
 from votr.ui.editor import VoiceEditor
 from votr.ui.library import VoiceLibrary
 from votr.ui.roleplay_panel import RoleplayPanel
+from votr.ui.wizard import DiscordWizard
 
 
 class MainWindow(QMainWindow):
@@ -38,6 +41,14 @@ class MainWindow(QMainWindow):
         self.library.preview_voice.connect(self.editor.preview.preview_other_voice)
         self.editor.voice_saved.connect(self._after_save)
         self.editor.voice_deleted.connect(self.show_library)
+        self.roleplay.wizard_requested.connect(self.open_wizard)
+        settings_menu = self.menuBar().addMenu("Settings")
+        discord = QAction("Discord setup…", self)
+        discord.triggered.connect(self.open_wizard)
+        settings_menu.addAction(discord)
+        self.panic_shortcut = QShortcut(QKeySequence("Ctrl+Shift+M"), self)
+        self.panic_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        self.panic_shortcut.activated.connect(self.roleplay.toggle_panic)
         self.refresh_chrome()
 
     def refresh_chrome(self) -> None:
@@ -71,8 +82,14 @@ class MainWindow(QMainWindow):
     def _after_save(self) -> None:
         self.show_library()
 
+    def open_wizard(self) -> None:
+        wizard = DiscordWizard(self.session, self)
+        wizard.exec()
+        self.roleplay.refresh()
+
     def closeEvent(self, event) -> None:  # noqa: N802 — Qt
         if self.editor.confirm_discard():
+            self.session.stop_roleplay()
             event.accept()
         else:
             event.ignore()
