@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QColorDialog,
+    QComboBox,
     QCompleter,
     QFormLayout,
     QGroupBox,
@@ -42,6 +43,26 @@ class VoiceEditor(QWidget):
 
     def _build(self) -> None:
         root = QVBoxLayout(self)
+        preset_row = QHBoxLayout()
+        self.preset_box = QComboBox()
+        self.preset_box.addItem("Start from a preset…", "")
+        for preset in self.session.presets:
+            self.preset_box.addItem(preset.name, preset.name)
+            self.preset_box.setItemData(
+                self.preset_box.count() - 1,
+                preset.description,
+                Qt.ItemDataRole.ToolTipRole,
+            )
+        self.preset_box.setToolTip(
+            "Named slider recipes plus Tone Tags. Loads a new, unsaved draft you "
+            "can Preview and tune."
+        )
+        use_preset = QPushButton("Use preset")
+        use_preset.clicked.connect(self._use_preset)
+        preset_row.addWidget(self.preset_box, 1)
+        preset_row.addWidget(use_preset)
+        root.addLayout(preset_row)
+
         form = QFormLayout()
         self.name_edit = QLineEdit()
         self.name_edit.textChanged.connect(self._on_name)
@@ -60,6 +81,20 @@ class VoiceEditor(QWidget):
         )
         self.hints_edit.textChanged.connect(self._on_hints)
         form.addRow("Tone Hints", self.hints_edit)
+        design_row = QHBoxLayout()
+        design = QPushButton("Design from Tone Hints")
+        design.setToolTip(
+            "Reads the words above (deep, tiny, gravelly, ghostly, echoing…) and "
+            "sets Tone Tags and sliders. Shapes how you sound; cannot change "
+            "accent or make you a specific person."
+        )
+        design.clicked.connect(self.design_from_hints)
+        self.design_status = QLabel()
+        self.design_status.setWordWrap(True)
+        self.design_status.setObjectName("design_status")
+        design_row.addWidget(design)
+        design_row.addWidget(self.design_status, 1)
+        form.addRow("", design_row)
         root.addLayout(form)
 
         tags = QGroupBox("Tone Tags")
@@ -172,6 +207,32 @@ class VoiceEditor(QWidget):
             return
         self.session.apply_tag(tag)
         self.reload_from_draft()
+
+    def _use_preset(self) -> None:
+        name = str(self.preset_box.currentData() or "")
+        if not name or not self.confirm_discard():
+            return
+        if self.session.edit_from_preset(name) is None:
+            return
+        self.design_status.setText(f"Preset “{name}” loaded — Preview, then Save.")
+        self.reload_from_draft()
+        self.preview.schedule_replay()
+
+    def design_from_hints(self) -> None:
+        prompt = self.hints_edit.toPlainText()
+        if not prompt.strip():
+            self.design_status.setText("Write a description in Tone Hints first.")
+            return
+        design = self.session.design_from_hints(prompt)
+        parts = []
+        if design.tone_tags:
+            parts.append("Tags: " + ", ".join(design.tone_tags))
+        if design.matched:
+            parts.append("Heard: " + ", ".join(dict.fromkeys(design.matched)))
+        parts.extend(design.notes)
+        self.design_status.setText(" · ".join(parts))
+        self.reload_from_draft()
+        self.preview.schedule_replay()
 
     def _remove_tag(self, tag: str) -> None:
         self.session.draft.tone_tags = [

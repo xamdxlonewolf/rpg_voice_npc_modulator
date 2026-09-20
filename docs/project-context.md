@@ -64,11 +64,19 @@ Other settled points (grill round 1, `docs/grill-round-1.md`):
 - Voice import/export = copy the JSON file; no UI for it in the rough draft.
 - Discord wizard targets VB-CABLE first; other cables detected by device-name pattern.
 - Panic/mute hotkey is global and always available in Roleplay Mode.
+- Voice creation helpers are CPU-only and offline: bundled **Presets** (named slider
+  recipes + Tone Tags) and **Design from Tone Hints** (free text → Tone Tags + sliders by
+  a word lexicon). They shape how the GM sounds; they cannot produce a specific person or
+  an accent. A neural designer sits first in the chain and falls back when not installed.
 
 ## Explicitly out of scope for the rough draft
 
 - In-person table play, room speakers, feedback suppression (ADR-0002).
-- Neural Engine, GPU detection, model downloads (later epic in `docs/backlog.md`).
+- Neural Engine itself and model downloads (later epic in `docs/backlog.md`). GPU
+  detection, the designer/Engine seam and an honest status page **are** in (E7, first
+  slice); nothing neural is installed or downloaded.
+- Live accent conversion of the GM's own speech. Voice conversion moves timbre, not
+  pronunciation; the app will not pretend otherwise (`docs/neural-voice.md`).
 - Cloud sync, accounts, sharing marketplace.
 - Training custom neural models inside the app.
 - Music/soundboard features, ambience, session recording.
@@ -84,6 +92,7 @@ Other settled points (grill round 1, `docs/grill-round-1.md`):
 | `docs/CONTEXT.md` | Glossary (domain language only). |
 | `docs/adr/` | Architecture decision records 0001–0006. |
 | `docs/backlog.md` | Rough-draft backlog: epics → stories → tasks, plus the later Neural Engine epic. |
+| `docs/neural-voice.md` | E7: what is feasible free and local (CPU vs NVIDIA GPU), why live accent conversion is not, what shipped. |
 
 ## Implementation tooling
 

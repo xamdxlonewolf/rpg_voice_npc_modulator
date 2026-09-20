@@ -48,3 +48,42 @@ def test_window_still_titled_voice_of_the_realm(tmp_path: Path) -> None:
     create_application(["votr-title"])
     window = create_main_window(Session(tmp_path))
     assert window.windowTitle() == WINDOW_TITLE
+
+
+@pytest.mark.skipif(not stretch_available(), reason="DSP Engine needs python-stretch")
+def test_editor_preset_and_design_buttons(tmp_path: Path) -> None:
+    _require_qt()
+    from votr.app import create_application, create_main_window
+
+    create_application(["votr-preset-test"])
+    session = Session(tmp_path)
+    window = create_main_window(session)
+    editor = window.editor
+    index = editor.preset_box.findData("Pixie")
+    assert index > 0
+    editor.preset_box.setCurrentIndex(index)
+    editor._use_preset()
+    assert editor.name_edit.text() == "Pixie"
+    assert session.engine.params()["pitch_semitones"] == pytest.approx(7.0)
+    assert "Pixie" in editor.design_status.text()
+
+    editor.hints_edit.setPlainText("a whispering Irish ghost")
+    editor.design_from_hints()
+    assert "ghostly" in session.draft.tone_tags
+    assert "whisper" in session.draft.tone_tags
+    status = editor.design_status.text()
+    assert "Tags:" in status
+    assert "accent" in status.lower()
+    assert session.engine.params()["breath"] > 0.0
+
+
+def test_settings_has_an_honest_neural_tab(tmp_path: Path) -> None:
+    _require_qt()
+    from votr.app import create_application
+    from votr.ui.settings import SettingsDialog
+
+    create_application(["votr-neural-tab"])
+    dialog = SettingsDialog(Session(tmp_path))
+    text = dialog.neural_report.text()
+    assert "Neural Engine" in text
+    assert "not installed" in text

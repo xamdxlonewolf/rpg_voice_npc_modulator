@@ -5,6 +5,13 @@ Windows installer artifacts are attached to GitHub Releases on `v*` tags.
 
 ## Unreleased
 
+- E7 first slice: twelve bundled Voice **Presets** ("Use preset" in the editor),
+  **Design from Tone Hints** (offline word lexicon → Tone Tags + sliders, reports
+  what it heard, notes accent / "sound like" requests instead of faking them),
+  NVIDIA GPU detection with an honest **Settings → Neural** page, and the neural
+  designer/Engine seam. Nothing neural is installed or downloaded. See
+  `docs/neural-voice.md`.
+
 - Breath is no longer a noise layer. It is a whispered copy of the voice itself
   (random-phase STFT of the Take, voice-shaped, frame-tight), so it only exists
   where the voice does; silence and a room floor gain nothing.
