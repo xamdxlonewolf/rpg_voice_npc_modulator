@@ -11,17 +11,23 @@ completed as each dependency is added to a release. Virtual Cable drivers are
 - License: GNU LGPL v3 (dynamically linked)
 - Used for: desktop UI
 
-## PortAudio (via sounddevice, planned)
+## PortAudio (via sounddevice)
 
-- Project: [PortAudio](https://www.portaudio.com/)
+- Project: [PortAudio](https://www.portaudio.com/) / [sounddevice](https://python-sounddevice.readthedocs.io/)
 - License: MIT-style
-- Used for: microphone and device I/O (not wired in S0.1)
+- Used for: duplex microphone and device I/O
 
-## Rubber Band Library (planned)
+## Signalsmith Stretch (via python-stretch)
 
-- Project: [Rubber Band](https://breakfastquay.com/rubberband/)
+- Project: [Signalsmith Stretch](https://signalsmith-audio.co.uk/code/stretch/) / [python-stretch](https://pypi.org/project/python-stretch/)
+- License: MIT
+- Used for: fallback live pitch shift (Windows wheels available)
+
+## Rubber Band Library (via rubband, optional)
+
+- Project: [Rubber Band](https://breakfastquay.com/rubberband/) / [rubband](https://pypi.org/project/rubband/)
 - License: GPLv2 or later
-- Used for: live pitch/formant shifting (not wired in S0.1)
+- Used for: intended live pitch/formant core (`LiveShifter`). No published Windows wheel as of 0.3.1.
 
 ## FFTW (via Rubber Band, planned)
 
