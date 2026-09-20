@@ -28,7 +28,11 @@ def test_first_run_wizard_pages_and_skip(tmp_path: Path) -> None:
     session = Session(tmp_path)
     wizard = FirstRunWizard(session)
     assert len(wizard.pageIds()) == 6
-    assert wizard.welcome_page.title() == "Welcome"
+    assert wizard.welcome_page.title() == "Voice of the Realm"
+    assert "Character Voice" in wizard.welcome_page.body.text()
+    assert "VB-CABLE" in wizard.welcome_page.body.text()
+    assert wizard.windowTitle().startswith("Voice of the Realm")
+    assert "1a1a1a" in wizard.styleSheet()
     wizard.latency_page.run_test()
     assert "Not glass-to-glass" in wizard.latency_page.report.text()
     wizard._finished()
