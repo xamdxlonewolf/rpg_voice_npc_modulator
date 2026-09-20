@@ -42,7 +42,9 @@ def _known_take(path: Path, sample_rate: int, n_samples: int = 1000) -> np.ndarr
     return loaded
 
 
-def _concatenated_process_block(engine: PassthroughEngine, take: np.ndarray) -> np.ndarray:
+def _concatenated_process_block(
+    engine: PassthroughEngine, take: np.ndarray
+) -> np.ndarray:
     remainder = take.size % engine.block_size
     if remainder:
         padded = np.concatenate(
