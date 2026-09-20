@@ -1,7 +1,7 @@
 # Copyright (C) 2026 Michael Cobb
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""S0.6: PyInstaller --onedir smoke. Windows size/cold-start still TBD."""
+"""Build the PyInstaller --onedir folder from packaging/VoiceOfTheRealm.spec."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+SPEC = ROOT / "packaging" / "VoiceOfTheRealm.spec"
 
 
 def main() -> int:
@@ -17,13 +18,8 @@ def main() -> int:
         sys.executable,
         "-m",
         "PyInstaller",
-        "--onedir",
         "--noconfirm",
-        "--name",
-        "VoiceOfTheRealm",
-        "--collect-all",
-        "PySide6",
-        str(ROOT / "src" / "votr" / "__main__.py"),
+        str(SPEC),
     ]
     print(" ".join(cmd))
     return subprocess.call(cmd, cwd=ROOT)

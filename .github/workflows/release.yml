@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package and bundle extras
+        run: python -m pip install -e ".[dev,bundle]"
+
+      - name: PyInstaller onedir
+        run: python scripts/build_bundle.py
+
+      - name: Smoke frozen --headless
+        run: python scripts/smoke_headless.py --frozen
+        env:
+          QT_QPA_PLATFORM: offscreen
+          VOTR_HEADLESS: "1"
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Stamp installer version from pyproject.toml
+        run: python scripts/stamp_inno_version.py
+
+      - name: Compile installer
+        run: iscc installer\votr.iss
+
+      - name: SHA-256
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem installer\output\VoiceOfTheRealm-*-setup.exe | Select-Object -First 1
+          if (-not $setup) { throw "installer exe not found" }
+          $hash = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLower()
+          $line = "{0}  {1}" -f $hash, $setup.Name
+          Set-Content -Path "$($setup.FullName).sha256" -Value $line
+          Get-Content "$($setup.FullName).sha256"
+
+      - name: Attach to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            installer/output/VoiceOfTheRealm-*-setup.exe
+            installer/output/VoiceOfTheRealm-*-setup.exe.sha256
+          generate_release_notes: true
+          body_path: CHANGELOG.md

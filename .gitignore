@@ -31,6 +31,10 @@ MANIFEST
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+!packaging/VoiceOfTheRealm.spec
+
+# Inno Setup output
+installer/output/
 
 # Installer logs
 pip-log.txt
