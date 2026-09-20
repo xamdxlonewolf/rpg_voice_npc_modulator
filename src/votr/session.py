@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from votr.devices import DeviceSettings
@@ -21,10 +22,10 @@ from votr.macros import load_macros
 from votr.neural import (
     NEURAL_ENGINE_ID,
     NeuralRuntime,
-    create_neural_engine,
+    build_neural_engine,
     probe_runtime,
 )
-from votr.neural_engine import NeuralEngine
+from votr.neural_engine import NeuralEngine, NeuralUnavailable
 from votr.presets import load_presets, preset_by_name, voice_from_preset
 from votr.roleplay import RoleplayError, RoleplayPath
 from votr.store import VoiceStore
@@ -32,6 +33,7 @@ from votr.voice import DSP_ENGINE_ID, Voice
 from votr.voicedesign import VoiceDesign, design_voice
 
 INSTALLED_ENGINE_IDS = {DSP_ENGINE_ID, "passthrough"}
+log = logging.getLogger("votr.session")
 
 
 class Session:
@@ -66,18 +68,20 @@ class Session:
     def refresh_neural(self) -> None:
         """Re-probe after a pack download; drops a stale Engine instance."""
         self.neural = probe_runtime(self.store.root.parent, gpu=self.neural.gpu)
+        self.neural_error = ""
         if not self.neural.ready:
             self.neural_engine = None
 
     def ensure_neural_engine(self) -> NeuralEngine | None:
         """Load the Neural Engine on first use (it is a multi-GB model)."""
         if self.neural_engine is None and self.neural.ready and not self.neural_error:
-            engine = create_neural_engine(
-                self.neural, block_size=self.engine.block_size
-            )
-            if engine is None:
-                self.neural_error = "Neural Engine failed to start; see the log."
-            self.neural_engine = engine
+            try:
+                self.neural_engine = build_neural_engine(
+                    self.neural, block_size=self.engine.block_size
+                )
+            except NeuralUnavailable as exc:
+                self.neural_error = f"Neural Engine failed to start: {exc}"
+                log.warning(self.neural_error)
         return self.neural_engine
 
     def preview_engine(self):

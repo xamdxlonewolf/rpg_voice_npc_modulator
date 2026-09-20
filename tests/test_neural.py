@@ -264,17 +264,12 @@ def test_session_uses_neural_engine_for_neural_drafts_when_ready(
         tmp_path, gpu=BIG_GPU, torch_state=lambda: (True, True, "ok")
     )
     fake = FakeConverter()
-    monkeypatch.setattr(
-        neural,
-        "create_neural_engine",
-        lambda runtime, block_size=512, converter_factory=None: NeuralEngine(
-            fake, block_size=block_size
-        ),
-    )
     import votr.session as session_module
 
     monkeypatch.setattr(
-        session_module, "create_neural_engine", neural.create_neural_engine
+        session_module,
+        "build_neural_engine",
+        lambda runtime, block_size=512: NeuralEngine(fake, block_size=block_size),
     )
     assert session.engine_installed(NEURAL_ENGINE_ID)
     clip = tmp_path / "ref.wav"
@@ -287,3 +282,53 @@ def test_session_uses_neural_engine_for_neural_drafts_when_ready(
     assert engine.block_size == session.engine.block_size
     session.draft.engine_id = DSP_ENGINE_ID
     assert session.preview_engine() is session.engine
+
+
+def test_runtime_check_names_missing_packages_and_real_import_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from votr import neural_backends
+
+    missing = neural_backends.missing_runtime_packages()
+    # On this VM at least wandb/tensorboard are absent; the hint must name pips.
+    assert missing and "wandb" in missing
+    with pytest.raises(RuntimeError, match="pip install"):
+        neural_backends.check_xvc_runtime(tmp_path)
+
+    monkeypatch.setattr(neural_backends, "missing_runtime_packages", lambda: [])
+    with pytest.raises(RuntimeError, match="source not found"):
+        neural_backends.check_xvc_runtime(tmp_path)
+    model_py = tmp_path / "models" / "codec" / "sac" / "model.py"
+    model_py.parent.mkdir(parents=True)
+    model_py.write_text("import definitely_not_a_module\n")
+
+    def boom(_name):
+        raise ImportError("No module named 'definitely_not_a_module'")
+
+    monkeypatch.setattr(neural_backends.importlib, "import_module", boom)
+    with pytest.raises(RuntimeError, match="definitely_not_a_module"):
+        neural_backends.check_xvc_runtime(tmp_path)
+
+
+@pytest.mark.skipif(not stretch_available(), reason="DSP Engine needs python-stretch")
+def test_session_reports_why_the_engine_failed_to_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import votr.session as session_module
+
+    session = Session(tmp_path)
+    _installed_pack(pack_root(tmp_path), CONVERSION_PACK)
+    session.neural = probe_runtime(
+        tmp_path, gpu=BIG_GPU, torch_state=lambda: (True, True, "ok")
+    )
+
+    def failing(runtime, block_size=512):
+        raise neural.NeuralUnavailable("X-VC needs Python packages: wandb tensorboard")
+
+    monkeypatch.setattr(session_module, "build_neural_engine", failing)
+    assert session.ensure_neural_engine() is None
+    assert "wandb" in session.neural_error
+    session.draft.engine_id = NEURAL_ENGINE_ID
+    assert session.preview_engine() is session.engine
+    session.refresh_neural()
+    assert session.neural_error == ""

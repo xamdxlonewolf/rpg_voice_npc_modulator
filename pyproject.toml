@@ -30,6 +30,32 @@ rubberband = [
 bundle = [
     "pyinstaller>=6.0",
 ]
+# E7 Neural Engine runtime (NVIDIA only). Install CUDA PyTorch first from the
+# PyTorch index, e.g. pip install torch torchaudio --index-url
+# https://download.pytorch.org/whl/cu128 — then pip install -e ".[neural]".
+# X-VC pins older versions upstream; these ranges are what Michael's Python
+# 3.13 box accepted (torch 2.9, transformers >= 4.46). wandb/tensorboard/
+# matplotlib are imported by X-VC's utils/log.py at load time, not used.
+neural = [
+    "torch>=2.6",
+    "torchaudio>=2.6",
+    "transformers>=4.46",
+    "hydra-core>=1.3",
+    "omegaconf>=2.3",
+    "einops>=0.8",
+    "einx>=0.3",
+    "x-transformers>=1.40",
+    "librosa>=0.10",
+    "soundfile>=0.12",
+    "soxr>=0.3",
+    "descript-audiotools>=0.7",
+    "scipy>=1.12",
+    "matplotlib>=3.7",
+    "tensorboard>=2.15",
+    "wandb>=0.18",
+    "tqdm>=4.66",
+    "qwen-tts>=0.1.1",
+]
 
 [project.scripts]
 votr = "votr.__main__:main"
