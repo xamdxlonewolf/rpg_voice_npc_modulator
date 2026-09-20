@@ -153,7 +153,9 @@ def _crest(samples: np.ndarray) -> float:
     return float(np.max(np.abs(samples)) / _rms(samples))
 
 
-def _band_energy(samples: np.ndarray, rate: int, low_hz: float, high_hz: float) -> float:
+def _band_energy(
+    samples: np.ndarray, rate: int, low_hz: float, high_hz: float
+) -> float:
     windowed = samples * np.hanning(samples.size)
     spec = np.abs(np.fft.rfft(windowed)) ** 2
     freqs = np.fft.rfftfreq(samples.size, 1.0 / rate)
