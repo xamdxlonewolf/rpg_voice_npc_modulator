@@ -5,6 +5,10 @@ Windows installer artifacts are attached to GitHub Releases on `v*` tags.
 
 ## Unreleased
 
+- Breath is no longer a noise layer. It is a whispered copy of the voice itself
+  (random-phase STFT of the Take, voice-shaped, frame-tight), so it only exists
+  where the voice does; silence and a room floor gain nothing.
+
 - Preview sliders retuned from the Windows listen: Body is a real formant shift,
   Tonality a level-matched tilt, Growl level-matched saturation with rasp, Hollow a
   cupped mid-band cavity (0 = off), Distance a gentler darker-and-quieter curve,
