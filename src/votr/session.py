@@ -7,8 +7,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from votr.devices import DeviceSettings
 from votr.dsp import DspEngine
 from votr.macros import load_macros
+from votr.roleplay import RoleplayPath
 from votr.store import VoiceStore
 from votr.voice import DSP_ENGINE_ID, Voice
 
@@ -20,6 +22,8 @@ class Session:
         self.store = VoiceStore(data_dir)
         self.macros = load_macros()
         self.engine = DspEngine(macros=self.macros)
+        self.settings = DeviceSettings.load(self.store.root.parent)
+        self.path = RoleplayPath(self.engine, self.settings)
         self.voices = self.store.load_all()
         self.warnings = list(self.store.warnings)
         self.draft = Voice.new()
@@ -112,3 +116,11 @@ class Session:
         if self.active_id is None:
             return None
         return self.voice_by_id(self.active_id)
+
+    def start_roleplay(self) -> None:
+        self.path.start()
+        self.roleplay_on = True
+
+    def stop_roleplay(self) -> None:
+        self.path.stop()
+        self.roleplay_on = False
