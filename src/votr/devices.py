@@ -46,6 +46,10 @@ def _name(device: dict[str, Any]) -> str:
     return str(device.get("name", ""))
 
 
+def _fold(text: str) -> str:
+    return "".join(ch for ch in text.lower() if ch.isalnum())
+
+
 def _channels(device: dict[str, Any], key: str) -> int:
     return int(device.get(key, 0))
 
@@ -76,7 +80,8 @@ def find_named_outputs(
             continue
         if "cable output" in name:
             continue
-        if any(part in name for part in patterns):
+        folded = _fold(name)
+        if any(_fold(part) in folded for part in patterns):
             found.append(device)
     return found
 
@@ -91,7 +96,8 @@ def find_named_inputs(
             continue
         if "cable input" in name:
             continue
-        if any(part in name for part in patterns):
+        folded = _fold(name)
+        if any(_fold(part) in folded for part in patterns):
             found.append(device)
     return found
 
@@ -129,8 +135,8 @@ def mic_devices(devices: list[dict[str, Any]] | None = None) -> list[dict[str, A
     )
     mics = []
     for device in input_devices(found):
-        name = _name(device).lower()
-        if any(part in name for part in skip):
+        folded = _fold(_name(device))
+        if any(_fold(part) in folded for part in skip):
             continue
         mics.append(device)
     return mics

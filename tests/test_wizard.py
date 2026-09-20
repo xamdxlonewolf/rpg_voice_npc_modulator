@@ -46,7 +46,7 @@ def test_wizard_links_vb_cable_never_bundled(tmp_path: Path) -> None:
 
     create_application(["votr-wizard"])
     wizard = DiscordWizard(Session(tmp_path))
-    assert wizard.pageCount() == 4
+    assert len(wizard.pageIds()) == 4
     html = wizard.cable_page.status.text()
     assert VB_CABLE_URL in html
     assert "VB-CABLE" in html

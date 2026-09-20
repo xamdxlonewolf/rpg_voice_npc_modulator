@@ -135,6 +135,6 @@ def test_test_tone_and_play_without_device() -> None:
 def test_monitor_warning_for_speakers() -> None:
     assert monitor_looks_like_speakers("Speakers (Realtek)") is True
     assert monitor_looks_like_speakers("Headphones") is False
-    assert "cable" in VB_CABLE_URL
-    assert "blackhole" in BLACKHOLE_URL
+    assert "vb-audio.com" in VB_CABLE_URL
+    assert "blackhole" in BLACKHOLE_URL.lower()
     assert "cable input" in CABLE_INPUT_PATTERNS

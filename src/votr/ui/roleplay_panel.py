@@ -96,7 +96,10 @@ class RoleplayPanel(QGroupBox):
         self.active_label.setText(f"Active Voice: {name}")
         running = self.session.roleplay_on and self.session.path.is_running()
         self.toggle.setChecked(self.session.roleplay_on)
-        on_label = "Roleplay Mode On" if self.session.roleplay_on else "Roleplay Mode Off"
+        if self.session.roleplay_on:
+            on_label = "Roleplay Mode On"
+        else:
+            on_label = "Roleplay Mode Off"
         self.toggle.setText(on_label)
         if self.session.roleplay_on and running:
             self.state_label.setText("On — Character Voice only.")
