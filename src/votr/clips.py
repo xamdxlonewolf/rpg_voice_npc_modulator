@@ -31,6 +31,8 @@ CLIP_TARGET_PEAK = 0.9
 QUIET_PEAK_DB = -24.0
 IMPORT_EXTENSIONS = (".wav", ".flac", ".mp3", ".ogg", ".aiff", ".aif", ".m4a")
 REFERENCE_CLIP_ID_KEY = "reference_clip_id"
+ORIGIN_RECORDED = "recorded"
+ORIGIN_PLAYBACK = "playback"
 
 
 class ClipError(ValueError):
@@ -58,10 +60,16 @@ class Clip:
     def level_note(self) -> str:
         note = f"recorded peak {self.source_peak_db:.0f} dBFS"
         if self.was_quiet:
-            note += (
-                " — quiet; it was boosted, but get closer to the mic for a "
-                "cleaner mimic"
-            )
+            if self.origin == ORIGIN_PLAYBACK:
+                note += (
+                    " — quiet; it was boosted, but turn the video up for a "
+                    "cleaner mimic"
+                )
+            else:
+                note += (
+                    " — quiet; it was boosted, but get closer to the mic for a "
+                    "cleaner mimic"
+                )
         return note
 
 
@@ -158,7 +166,7 @@ class ClipLibrary:
         sample_rate: int,
         name: str,
         *,
-        origin: str = "recorded",
+        origin: str = ORIGIN_RECORDED,
     ) -> Clip:
         audio = np.asarray(samples, dtype=np.float32).reshape(-1)
         if sample_rate != CLIP_SAMPLE_RATE:

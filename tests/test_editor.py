@@ -307,3 +307,108 @@ def test_editor_neural_voice_picks_uploads_and_records_clips(
     editor.engine_box.setCurrentIndex(0)
     assert session.draft.engine_id == "dsp-v1"
     assert editor.sliders_box.isVisibleTo(editor)
+
+
+@pytest.mark.skipif(not stretch_available(), reason="DSP Engine needs python-stretch")
+def test_editor_records_whats_playing_from_loopback_not_mic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _require_qt()
+    import numpy as np
+
+    from votr.app import create_application, create_main_window
+    from votr.clips import CLIP_SAMPLE_RATE, ORIGIN_PLAYBACK, REFERENCE_CLIP_ID_KEY
+    from votr.loopback import (
+        RECORD_MODE_PLAYBACK,
+        CapturePlan,
+    )
+    from votr.neural_engine import NEURAL_ENGINE_ID
+    from votr.ui import clips_panel
+
+    create_application(["votr-loopback-clips"])
+    session = Session(tmp_path)
+    window = create_main_window(session)
+    editor = window.editor
+    window.show_new_editor()
+    editor.engine_box.setCurrentIndex(1)
+    assert session.draft.engine_id == NEURAL_ENGINE_ID
+
+    # Honest on machines without loopback (this Linux CI): button stays visible.
+    assert editor.mimic.playback_button.text() == "Record what's playing"
+    assert "WASAPI" in editor.mimic.playback_button.toolTip() or (
+        editor.mimic.playback_button.isEnabled()
+    )
+
+    loopback_hz = 880.0
+    t = np.arange(CLIP_SAMPLE_RATE * 3) / CLIP_SAMPLE_RATE
+    loopback_audio = (0.3 * np.sin(2 * np.pi * loopback_hz * t)).astype(np.float32)
+    opened: list[CapturePlan] = []
+
+    plan = CapturePlan(
+        mode=RECORD_MODE_PLAYBACK,
+        backend="sounddevice-wasapi",
+        device=7,
+        device_name="Speakers",
+        loopback=True,
+        origin=ORIGIN_PLAYBACK,
+        channels=2,
+    )
+
+    class FakeStream:
+        def __init__(self, chosen: CapturePlan, callback) -> None:
+            opened.append(chosen)
+            self._callback = callback
+
+        def start(self) -> None:
+            self._callback(loopback_audio[:, None], loopback_audio.size, None, None)
+
+        def stop(self) -> None:
+            return None
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(clips_panel, "playback_capture_available", lambda: True)
+    monkeypatch.setattr(clips_panel, "playback_unavailable_reason", lambda: "")
+    monkeypatch.setattr(
+        clips_panel,
+        "list_playback_targets",
+        lambda: [
+            {
+                "name": "Speakers",
+                "index": 7,
+                "max_output_channels": 2,
+                "max_input_channels": 0,
+            }
+        ],
+    )
+    monkeypatch.setattr(clips_panel, "plan_capture", lambda *_args, **_kwargs: plan)
+    monkeypatch.setattr(
+        clips_panel,
+        "open_capture",
+        lambda chosen, callback, samplerate, devices=None: FakeStream(chosen, callback),
+    )
+
+    editor.mimic.refresh()
+    assert editor.mimic.playback_button.isEnabled()
+    assert editor.mimic.playback_device_box.findData("Speakers") >= 0
+    assert editor.mimic.start_recording(RECORD_MODE_PLAYBACK)
+    assert "what's playing" in editor.mimic.status.text()
+    assert editor.mimic.stop_recording(name="Video line")
+
+    assert opened and opened[0] is plan
+    assert opened[0].loopback is True
+    assert opened[0].mode == RECORD_MODE_PLAYBACK
+    assert opened[0].device == 7
+    clip = session.clips.by_name("Video line")
+    assert clip is not None
+    assert clip.origin == ORIGIN_PLAYBACK
+    assert session.draft.params[REFERENCE_CLIP_ID_KEY] == clip.id
+    samples, rate = session.clips.load(clip.id)
+    assert rate == CLIP_SAMPLE_RATE
+    n = min(samples.size, loopback_audio.size)
+    assert float(np.corrcoef(samples[:n], loopback_audio[:n])[0, 1]) > 0.99
+    mic_like = (0.3 * np.sin(2 * np.pi * 180.0 * t)).astype(np.float32)
+    assert float(np.corrcoef(samples[:n], mic_like[:n])[0, 1]) < 0.2
+    assert "dBFS" in editor.mimic.status.text()
+    assert "Play" in editor.mimic.status.text()

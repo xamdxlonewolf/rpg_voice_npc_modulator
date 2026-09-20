@@ -12,6 +12,7 @@ import pytest
 from votr.clips import (
     CLIP_SAMPLE_RATE,
     MAX_CLIP_SECONDS,
+    ORIGIN_PLAYBACK,
     REFERENCE_CLIP_ID_KEY,
     ClipError,
     ClipLibrary,
@@ -206,3 +207,8 @@ def test_clips_are_stored_at_a_healthy_level_and_remember_source_peak(
         0.9, abs=0.01
     )
     assert ClipLibrary(tmp_path).get(quiet.id).source_peak_db == quiet.source_peak_db
+    from_speakers = library.add(
+        _speech(3.0) * 0.02, CLIP_SAMPLE_RATE, "quiet video", origin=ORIGIN_PLAYBACK
+    )
+    assert from_speakers.was_quiet and "video" in from_speakers.level_note
+    assert "closer to the mic" not in from_speakers.level_note

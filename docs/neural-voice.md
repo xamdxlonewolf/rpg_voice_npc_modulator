@@ -178,6 +178,11 @@ In the Voice editor, the **Engine** dropdown switches between *Your voice, shape
 
 - **Record (30 s max)** — records from the mic with a remaining-time bar, auto-stops at
   30 s, asks for a name, saves the clip and uses it.
+- **Record what's playing** — records the audio already coming out of the selected
+  playback device (Windows WASAPI loopback / default output), not the microphone.
+  Same 30 s cap, countdown, name/save/use and Play. Use this for a video's
+  soundtrack. The button is disabled with an honest reason if loopback isn't
+  available; pick the speakers the video is using if you have more than one.
 - **Upload…** — WAV, FLAC, MP3, OGG, AIFF; decoded with Pedalboard, resampled to 48 kHz,
   silence trimmed, capped at 30 s.
 - Dropdown + **Use this clip** — pick any library clip for this Voice; **Rename…** and
