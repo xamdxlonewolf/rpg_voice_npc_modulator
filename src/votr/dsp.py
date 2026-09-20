@@ -72,12 +72,14 @@ class DspEngine(BaseEngine):
         sample_rate: int = DEFAULT_SAMPLE_RATE,
         macros: dict[str, Macro] | None = None,
         prefer_rubband: bool = True,
+        block_size: int | None = None,
     ) -> None:
         self._use_rubband = bool(prefer_rubband and rubband_available())
         if not self._use_rubband and not stretch_available():
             raise RuntimeError("DSP Engine needs python-stretch or rubband")
-        block_size = 512 if self._use_rubband else 256
-        super().__init__(block_size=block_size, sample_rate=sample_rate)
+        default_block = 512 if self._use_rubband else 256
+        chosen = int(block_size) if block_size else default_block
+        super().__init__(block_size=chosen, sample_rate=sample_rate)
         self._params = dict(_DEFAULTS)
         self._macro_defs = macros or {}
         self._env = 0.0
@@ -85,8 +87,8 @@ class DspEngine(BaseEngine):
         self._comb = np.zeros(max(8, int(sample_rate * 0.006)), dtype=np.float32)
         self._comb_i = 0
         self._shifter: Any = None
-        self._stretch_in = np.zeros((1, block_size), dtype=np.float32)
-        self._live_out = np.zeros(block_size, dtype=np.float32)
+        self._stretch_in = np.zeros((1, chosen), dtype=np.float32)
+        self._live_out = np.zeros(chosen, dtype=np.float32)
         self._rng = np.random.default_rng()
         self._fade_left = 0
         self._fade_total = 0

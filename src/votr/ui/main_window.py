@@ -12,8 +12,10 @@ from PySide6.QtWidgets import QLabel, QMainWindow, QStackedWidget, QVBoxLayout, 
 from votr import WINDOW_TITLE
 from votr.session import Session
 from votr.ui.editor import VoiceEditor
+from votr.ui.first_run import FirstRunWizard
 from votr.ui.library import VoiceLibrary
 from votr.ui.roleplay_panel import RoleplayPanel
+from votr.ui.settings import SettingsDialog
 from votr.ui.wizard import DiscordWizard
 
 
@@ -43,10 +45,18 @@ class MainWindow(QMainWindow):
         self.editor.voice_deleted.connect(self.show_library)
         self.roleplay.wizard_requested.connect(self.open_wizard)
         settings_menu = self.menuBar().addMenu("Settings")
+        open_settings = QAction("Settings…", self)
+        open_settings.triggered.connect(self.open_settings)
+        first_run = QAction("First-run setup…", self)
+        first_run.triggered.connect(self.open_first_run)
         discord = QAction("Discord setup…", self)
         discord.triggered.connect(self.open_wizard)
+        settings_menu.addAction(open_settings)
+        settings_menu.addAction(first_run)
         settings_menu.addAction(discord)
-        self.panic_shortcut = QShortcut(QKeySequence("Ctrl+Shift+M"), self)
+        self.panic_shortcut = QShortcut(
+            QKeySequence(session.settings.panic_hotkey), self
+        )
         self.panic_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
         self.panic_shortcut.activated.connect(self.roleplay.toggle_panic)
         self.refresh_chrome()
@@ -85,6 +95,17 @@ class MainWindow(QMainWindow):
     def open_wizard(self) -> None:
         wizard = DiscordWizard(self.session, self)
         wizard.exec()
+        self.roleplay.refresh()
+
+    def open_first_run(self) -> None:
+        wizard = FirstRunWizard(self.session, self)
+        wizard.exec()
+        self.roleplay.refresh()
+
+    def open_settings(self) -> None:
+        dialog = SettingsDialog(self.session, self)
+        dialog.exec()
+        self.panic_shortcut.setKey(QKeySequence(self.session.settings.panic_hotkey))
         self.roleplay.refresh()
 
     def closeEvent(self, event) -> None:  # noqa: N802 — Qt

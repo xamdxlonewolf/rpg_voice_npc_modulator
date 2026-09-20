@@ -47,4 +47,6 @@ def run(argv: list[str] | None = None) -> int:
     if is_headless(args):
         return 0
     window.show()
+    if not window.session.settings.first_run_completed:
+        window.open_first_run()
     return app.exec()

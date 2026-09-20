@@ -9,8 +9,16 @@ from pathlib import Path
 
 from votr.devices import DeviceSettings
 from votr.dsp import DspEngine
+from votr.latency import (
+    LatencyProbe,
+    block_for_quality,
+    choose_probe,
+    quality_for_block,
+)
+from votr.latency import run_latency_test as probe_latency
+from votr.live import AudioDeviceError
 from votr.macros import load_macros
-from votr.roleplay import RoleplayPath
+from votr.roleplay import RoleplayError, RoleplayPath
 from votr.store import VoiceStore
 from votr.voice import DSP_ENGINE_ID, Voice
 
@@ -21,8 +29,9 @@ class Session:
     def __init__(self, data_dir: Path | None = None) -> None:
         self.store = VoiceStore(data_dir)
         self.macros = load_macros()
-        self.engine = DspEngine(macros=self.macros)
         self.settings = DeviceSettings.load(self.store.root.parent)
+        block = self.settings.block_size or None
+        self.engine = DspEngine(macros=self.macros, block_size=block)
         self.path = RoleplayPath(self.engine, self.settings)
         self.voices = self.store.load_all()
         self.warnings = list(self.store.warnings)
@@ -124,3 +133,53 @@ class Session:
     def stop_roleplay(self) -> None:
         self.path.stop()
         self.roleplay_on = False
+
+    def save_settings(self) -> None:
+        self.settings.save(self.store.root.parent)
+
+    def apply_block_size(self, block_size: int) -> None:
+        if block_size == self.engine.block_size:
+            self.settings.block_size = block_size
+            self.settings.latency_quality = quality_for_block(block_size)
+            return
+        was_on = self.roleplay_on
+        if was_on:
+            self.stop_roleplay()
+        params = self.engine.params()
+        prefer = bool(getattr(self.engine, "_use_rubband", False))
+        self.engine = DspEngine(
+            macros=self.macros, block_size=block_size, prefer_rubband=prefer
+        )
+        self.engine.set_params(params)
+        self.path.engine = self.engine
+        self.settings.block_size = block_size
+        self.settings.latency_quality = quality_for_block(block_size)
+        if was_on:
+            try:
+                self.start_roleplay()
+            except (RoleplayError, AudioDeviceError):
+                self.roleplay_on = False
+
+    def apply_latency_quality(self, quality: int) -> None:
+        self.apply_block_size(block_for_quality(quality))
+        self.save_settings()
+
+    def run_latency_test(self, *, duration_s: float = 10.0) -> LatencyProbe:
+        prefer = bool(getattr(self.engine, "_use_rubband", False))
+
+        def make(block: int) -> DspEngine:
+            return DspEngine(
+                macros=self.macros, block_size=block, prefer_rubband=prefer
+            )
+
+        probes = probe_latency(make, duration_s=duration_s)
+        chosen = choose_probe(probes)
+        self.settings.latency_method = chosen.method
+        self.settings.latency_ms = chosen.measured_ms
+        self.settings.latency_engine_ms = chosen.engine_ms
+        self.settings.latency_device_ms = chosen.device_ms
+        self.settings.latency_blocked = chosen.blocked or ""
+        if chosen.total_ms is not None:
+            self.apply_block_size(chosen.block_size)
+        self.save_settings()
+        return chosen
