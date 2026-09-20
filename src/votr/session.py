@@ -14,10 +14,10 @@ from votr.latency import (
     block_for_quality,
     choose_probe,
     quality_for_block,
-    run_latency_test as probe_latency,
 )
-from votr.macros import load_macros
+from votr.latency import run_latency_test as probe_latency
 from votr.live import AudioDeviceError
+from votr.macros import load_macros
 from votr.roleplay import RoleplayError, RoleplayPath
 from votr.store import VoiceStore
 from votr.voice import DSP_ENGINE_ID, Voice
