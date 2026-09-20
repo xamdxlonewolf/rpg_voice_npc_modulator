@@ -19,6 +19,7 @@ from __future__ import annotations
 import importlib
 import os
 import sys
+import types
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -42,7 +43,6 @@ XVC_RUNTIME_MODULES: tuple[tuple[str, str], ...] = (
     ("soundfile", "soundfile"),
     ("soxr", "soxr"),
     ("torchaudio", "torchaudio"),
-    ("audiotools", "descript-audiotools"),
     ("scipy", "scipy"),
     ("matplotlib", "matplotlib"),
     ("tensorboard", "tensorboard"),
@@ -191,6 +191,34 @@ class XvcConverter:
         return np.asarray(audio, dtype=np.float32)[: window.size]
 
 
+def ensure_audiotools_stub() -> bool:
+    """Satisfy X-VC's ``from audiotools import AudioSignal`` without the package.
+
+    ``descript-audiotools`` pins ``protobuf<3.20``, which no modern
+    onnxruntime/wandb/tensorboard accepts, so it cannot be a declared
+    dependency. X-VC only uses ``AudioSignal``/``STFTParams`` in its training
+    losses; inference merely imports the names. If the real package is
+    installed it is used; otherwise this placeholder module is registered.
+    Returns True when the stub was installed.
+    """
+    if "audiotools" in sys.modules or importlib.util.find_spec("audiotools"):
+        return False
+
+    class _TrainingOnly:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError(
+                "audiotools is only needed for X-VC training; install "
+                "descript-audiotools in a separate environment for that."
+            )
+
+    stub = types.ModuleType("audiotools")
+    stub.__dict__["AudioSignal"] = type("AudioSignal", (_TrainingOnly,), {})
+    stub.__dict__["STFTParams"] = type("STFTParams", (_TrainingOnly,), {})
+    stub.__dict__["__votr_stub__"] = True
+    sys.modules["audiotools"] = stub
+    return True
+
+
 def missing_runtime_packages() -> list[str]:
     """pip names of X-VC runtime packages that are not importable here."""
     missing = []
@@ -213,6 +241,7 @@ def check_xvc_runtime(source: Path) -> None:
         raise RuntimeError(
             f"X-VC source not found under {source}; re-download the conversion pack."
         )
+    ensure_audiotools_stub()
     try:
         importlib.import_module("models.codec.sac.model")
     except Exception as exc:

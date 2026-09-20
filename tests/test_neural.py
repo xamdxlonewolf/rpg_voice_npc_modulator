@@ -337,3 +337,48 @@ def test_session_reports_why_the_engine_failed_to_start(
     assert session.preview_engine() is session.engine
     session.refresh_neural()
     assert session.neural_error == ""
+
+
+def test_audiotools_stub_satisfies_xvc_import_without_the_package(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib
+    import sys
+
+    from votr import neural_backends
+
+    monkeypatch.delitem(sys.modules, "audiotools", raising=False)
+    monkeypatch.setattr(neural_backends.importlib.util, "find_spec", lambda name: None)
+    assert neural_backends.ensure_audiotools_stub() is True
+    module = importlib.import_module("audiotools")
+    assert getattr(module, "__votr_stub__", False)
+    from audiotools import AudioSignal, STFTParams  # type: ignore[import-not-found]
+
+    with pytest.raises(RuntimeError, match="training"):
+        AudioSignal(np.zeros(10), 16000)
+    with pytest.raises(RuntimeError):
+        STFTParams()
+    # Second call is a no-op; an installed real package is never shadowed.
+    assert neural_backends.ensure_audiotools_stub() is False
+    monkeypatch.delitem(sys.modules, "audiotools", raising=False)
+    monkeypatch.setattr(
+        neural_backends.importlib.util, "find_spec", lambda name: object()
+    )
+    assert neural_backends.ensure_audiotools_stub() is False
+    assert "audiotools" not in sys.modules
+
+
+def test_neural_extra_has_no_protobuf_fight() -> None:
+    import tomllib
+
+    data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+    extra = data["project"]["optional-dependencies"]["neural"]
+    joined = " ".join(extra).lower()
+    assert "descript-audiotools" not in joined
+    assert "protobuf" not in joined
+    assert "audiotools" not in [
+        m
+        for m, _ in __import__(
+            "votr.neural_backends", fromlist=["XVC_RUNTIME_MODULES"]
+        ).XVC_RUNTIME_MODULES
+    ]
