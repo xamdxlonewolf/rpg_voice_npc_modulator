@@ -30,5 +30,6 @@ ruff check src tests
 ```
 
 Tests construct the window on Qt's offscreen platform so they can run without a
-display. `python -m votr --headless` (or `VOTR_HEADLESS=1`) builds the window and
-exits without entering the event loop.
+display. `python -m votr --headless` (or `VOTR_HEADLESS=1`) selects that plugin,
+builds the window, and exits without entering the event loop. GUI tests skip if
+PySide6 cannot load its native libraries.

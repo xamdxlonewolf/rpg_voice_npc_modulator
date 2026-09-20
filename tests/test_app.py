@@ -3,9 +3,19 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from votr import WINDOW_TITLE, __version__
+
+
+def _require_qt_widgets() -> None:
+    """Skip GUI tests when Qt native libraries are missing (headless CI)."""
+    try:
+        from PySide6.QtWidgets import QApplication, QMainWindow, QWidget  # noqa: F401
+    except (ImportError, OSError) as exc:
+        pytest.skip(f"PySide6 QtWidgets unavailable: {exc}")
 
 
 def test_package_version() -> None:
@@ -24,7 +34,7 @@ def test_headless_flag_without_qt(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_window_title_offscreen() -> None:
-    pytest.importorskip("PySide6.QtWidgets")
+    _require_qt_widgets()
     from votr.app import create_application, create_main_window
 
     create_application(["votr-test"])
@@ -33,7 +43,18 @@ def test_window_title_offscreen() -> None:
 
 
 def test_run_headless_exits_zero() -> None:
-    pytest.importorskip("PySide6.QtWidgets")
+    _require_qt_widgets()
     from votr.app import run
 
     assert run(["--headless"]) == 0
+
+
+def test_run_headless_defaults_offscreen_platform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+    _require_qt_widgets()
+    from votr.app import run
+
+    assert run(["--headless"]) == 0
+    assert os.environ.get("QT_QPA_PLATFORM") == "offscreen"

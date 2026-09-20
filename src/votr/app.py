@@ -40,6 +40,8 @@ def is_headless(argv: list[str]) -> bool:
 def run(argv: list[str] | None = None) -> int:
     """Show the empty window, or construct it and exit when headless."""
     args = list(sys.argv[1:] if argv is None else argv)
+    if is_headless(args):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     app = create_application(["votr", *args])
     window = create_main_window()
     if is_headless(args):
