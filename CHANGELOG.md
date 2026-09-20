@@ -5,6 +5,13 @@ Windows installer artifacts are attached to GitHub Releases on `v*` tags.
 
 ## Unreleased
 
+- Preview sliders retuned from the Windows listen: Body is a real formant shift,
+  Tonality a level-matched tilt, Growl level-matched saturation with rasp, Hollow a
+  cupped mid-band cavity (0 = off), Distance a gentler darker-and-quieter curve,
+  Breath aspiration that follows the voice (no hiss bed), Gate an RMS-envelope
+  gate with hold and hysteresis that never chops speech. The effect chain is
+  level-matched to the dry Take on `render`; Room is unchanged.
+
 ## 0.1.0 — 2026-09-20
 
 Rough-draft app (E0–E6):
