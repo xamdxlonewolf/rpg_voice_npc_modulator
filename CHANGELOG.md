@@ -5,6 +5,10 @@ Windows installer artifacts are attached to GitHub Releases on `v*` tags.
 
 ## Unreleased
 
+- Mimic clip library for Neural Voices: Engine dropdown in the editor (DSP ↔
+  Neural), record up to 30 s with a countdown, upload WAV/FLAC/MP3/OGG/AIFF,
+  pick/rename/delete clips, Voices store the clip id. No more hand-editing JSON.
+
 - Neural: `pip install -e ".[neural]"` extra with the runtime X-VC and Qwen3-TTS
   actually need (incl. wandb/tensorboard/matplotlib/audiotools that X-VC imports
   at load); the adapter now reports the real import error and a pip hint instead

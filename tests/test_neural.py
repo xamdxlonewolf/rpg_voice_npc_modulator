@@ -213,7 +213,12 @@ def test_neural_designer_makes_a_reference_clip_when_ready(tmp_path: Path) -> No
     design = designer.design("a weary old ferryman with a voice like gravel")
     assert design.engine_id == NEURAL_ENGINE_ID
     clip = Path(design.params[REFERENCE_CLIP_KEY])
-    assert clip.is_file() and clip.parent == root / "clips"
+    assert clip.is_file() and clip.parent == tmp_path / "clips"
+    from votr.clips import REFERENCE_CLIP_ID_KEY, ClipLibrary
+
+    stored = ClipLibrary(tmp_path).get(design.params[REFERENCE_CLIP_ID_KEY])
+    assert stored is not None and stored.origin == "designed"
+    assert stored.name == "Weary Old Ferryman"
     assert design.params["mix"] == 1.0
     assert design.name == "Weary Old Ferryman"
     assert any("Accent is still yours" in note for note in design.notes)

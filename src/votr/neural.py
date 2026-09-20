@@ -15,12 +15,12 @@ import importlib.util
 import logging
 import shutil
 import subprocess
-import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from votr.clips import REFERENCE_CLIP_ID_KEY, ClipLibrary
 from votr.neural_engine import (
     NEURAL_ENGINE_ID,
     REFERENCE_CLIP_KEY,
@@ -318,17 +318,19 @@ class NeuralDesigner:
             raise RuntimeError(reason)
         assert self._runtime is not None
         from votr.voicedesign import _guess_name
-        from votr.wavutil import write_wav
 
         audio, rate = self._clip_maker().make_clip(prompt.strip())
-        clips = self._runtime.root / "clips"
-        clips.mkdir(parents=True, exist_ok=True)
-        path = clips / f"{uuid.uuid4()}.wav"
-        write_wav(path, audio, int(rate))
+        name = _guess_name(prompt)
+        library = ClipLibrary(self._runtime.root.parent)
+        clip = library.add(audio, int(rate), name, origin="designed")
         return VoiceDesign(
-            name=_guess_name(prompt),
+            name=name,
             tone_tags=[],
-            params={REFERENCE_CLIP_KEY: str(path), "mix": 1.0},
+            params={
+                REFERENCE_CLIP_ID_KEY: clip.id,
+                REFERENCE_CLIP_KEY: str(library.path_for(clip.id)),
+                "mix": 1.0,
+            },
             matched=[prompt.strip()],
             notes=[
                 "Reference clip spoken by Qwen3-TTS VoiceDesign from your words; the "
