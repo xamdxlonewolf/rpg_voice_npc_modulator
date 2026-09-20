@@ -219,6 +219,15 @@ def play_to_cable(
         return False
 
 
+def _opt_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 @dataclass
 class DeviceSettings:
     mic_name: str = ""
@@ -227,6 +236,15 @@ class DeviceSettings:
     hold_to_talk: bool = False
     monitor_on: bool = False
     wizard_completed: bool = False
+    first_run_completed: bool = False
+    block_size: int = 0
+    latency_quality: int = 0
+    latency_ms: float | None = None
+    latency_engine_ms: float | None = None
+    latency_device_ms: float | None = None
+    latency_method: str = ""
+    latency_blocked: str = ""
+    panic_hotkey: str = "Ctrl+Shift+M"
 
     def save(self, data_dir: Path) -> Path:
         path = Path(data_dir) / "settings.json"
@@ -252,6 +270,15 @@ class DeviceSettings:
                 hold_to_talk=bool(data.get("hold_to_talk", False)),
                 monitor_on=bool(data.get("monitor_on", False)),
                 wizard_completed=bool(data.get("wizard_completed", False)),
+                first_run_completed=bool(data.get("first_run_completed", False)),
+                block_size=int(data.get("block_size", 0) or 0),
+                latency_quality=int(data.get("latency_quality", 0) or 0),
+                latency_ms=_opt_float(data.get("latency_ms")),
+                latency_engine_ms=_opt_float(data.get("latency_engine_ms")),
+                latency_device_ms=_opt_float(data.get("latency_device_ms")),
+                latency_method=str(data.get("latency_method", "")),
+                latency_blocked=str(data.get("latency_blocked", "")),
+                panic_hotkey=str(data.get("panic_hotkey") or "Ctrl+Shift+M"),
             )
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             return cls()
