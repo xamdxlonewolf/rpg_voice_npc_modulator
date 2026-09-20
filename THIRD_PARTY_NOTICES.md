@@ -35,11 +35,11 @@ completed as each dependency is added to a release. Virtual Cable drivers are
 - License: GPLv2 or later
 - Used for: FFT support inside Rubber Band
 
-## Pedalboard (planned)
+## Pedalboard
 
 - Project: [spotify/pedalboard](https://github.com/spotify/pedalboard)
 - License: GPLv3
-- Used for: effects (reverb, filters, compressor)
+- Used for: block-wise live effects (reverb, low-pass, compressor) with `reset=False`
 
 ## JUCE (via Pedalboard, planned)
 
