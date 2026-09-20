@@ -29,7 +29,7 @@ from votr.clips import (
     MAX_CLIP_SECONDS,
     ClipError,
 )
-from votr.preview import input_devices
+from votr.preview import input_devices, play_on_speakers, stop_playback
 from votr.session import Session
 
 
@@ -64,9 +64,18 @@ class MimicClipPanel(QGroupBox):
         pick = QHBoxLayout()
         self.clip_box = QComboBox()
         self.clip_box.setObjectName("clip_box")
+        self.clip_box.currentIndexChanged.connect(self._on_pick)
+        self.play_button = QPushButton("Play")
+        self.play_button.setObjectName("clip_play")
+        self.play_button.setToolTip("Hear the selected clip before you trust it.")
+        self.play_button.clicked.connect(self.play_selected)
+        stop = QPushButton("Stop")
+        stop.clicked.connect(stop_playback)
         self.use_button = QPushButton("Use this clip")
         self.use_button.clicked.connect(self.use_selected)
         pick.addWidget(self.clip_box, 1)
+        pick.addWidget(self.play_button)
+        pick.addWidget(stop)
         pick.addWidget(self.use_button)
         root.addLayout(pick)
 
@@ -117,12 +126,37 @@ class MimicClipPanel(QGroupBox):
             self.clip_box.setCurrentIndex(index)
         self.clip_box.blockSignals(False)
         self.use_button.setEnabled(bool(clips))
+        self.play_button.setEnabled(bool(clips))
         if current is not None:
-            self.status.setText(f"This Voice mimics “{current.name}”.")
+            self.status.setText(
+                f"This Voice mimics “{current.name}” ({current.level_note})."
+            )
         elif clips:
-            self.status.setText("Pick a clip and press “Use this clip”.")
+            self.status.setText("Pick a clip, Play it to check, then “Use this clip”.")
         else:
             self.status.setText("This Voice has no mimic clip yet.")
+
+    def _on_pick(self, _index: int) -> None:
+        clip = (
+            self.session.clips.get(self.selected_id()) if self.selected_id() else None
+        )
+        if clip is not None and self._recording is False:
+            self.status.setText(
+                f"“{clip.name}”: {clip.seconds:.1f} s, {clip.level_note}."
+            )
+
+    # -- play -------------------------------------------------------------
+
+    def play_selected(self) -> bool:
+        clip_id = self.selected_id()
+        loaded = self.session.clips.load(clip_id) if clip_id else None
+        if loaded is None:
+            return False
+        samples, rate = loaded
+        played = play_on_speakers(samples, sample_rate=rate)
+        if not played:
+            self.status.setText("No speakers found — cannot play the clip.")
+        return played
 
     # -- select -----------------------------------------------------------
 
@@ -147,7 +181,10 @@ class MimicClipPanel(QGroupBox):
             self.status.setText(str(exc))
             return False
         self._select_and_use(clip.id)
-        self.status.setText(f"Added “{clip.name}” ({clip.seconds:.1f} s) and using it.")
+        self.status.setText(
+            f"Added “{clip.name}” ({clip.seconds:.1f} s, {clip.level_note}) and using "
+            "it. Press Play to check it."
+        )
         return True
 
     def _upload_dialog(self) -> None:
@@ -249,7 +286,10 @@ class MimicClipPanel(QGroupBox):
             self.status.setText(str(exc))
             return False
         self._select_and_use(clip.id)
-        self.status.setText(f"Saved “{clip.name}” ({clip.seconds:.1f} s) and using it.")
+        self.status.setText(
+            f"Saved “{clip.name}” ({clip.seconds:.1f} s, {clip.level_note}) and using "
+            "it. Press Play to check it."
+        )
         return True
 
     def _select_and_use(self, clip_id: str) -> None:

@@ -70,6 +70,35 @@ def _cuda_device(index: int = 0) -> Any:
     return torch.device(f"cuda:{index}")
 
 
+def xvc_volume_normalize(audio: np.ndarray, coeff: float = 0.2) -> np.ndarray:
+    """NumPy port of X-VC's ``utils.audio.audio_volume_normalize``.
+
+    X-VC trains and infers with ``volume_normalize: True``: the loud part of the
+    signal (90th–99th percentile of |x|) is scaled to ``coeff``. Feeding raw
+    levels — a quiet mic, a hot upload — makes the model crackle and come back
+    soft, so every reference clip and Take goes through this first.
+    """
+    x = np.asarray(audio, dtype=np.float32).reshape(-1)
+    if x.size == 0:
+        return x
+    temp = np.sort(np.abs(x))
+    if temp[-1] < 0.1:
+        x = x / max(float(temp[-1]), 1e-3) * 0.1
+        temp = np.sort(np.abs(x))
+    temp = temp[temp > 0.01]
+    if temp.size <= 10:
+        return x.astype(np.float32)
+    volume = float(np.mean(temp[int(0.9 * temp.size) : int(0.99 * temp.size)]))
+    x = x * float(np.clip(coeff / max(volume, 1e-6), 0.1, 10.0))
+    peak = float(np.max(np.abs(x)))
+    if peak > 1.0:
+        x = x / peak
+    return x.astype(np.float32)
+
+
+XVC_HIGHPASS_HZ = 40.0
+
+
 class XvcConverter:
     """``VoiceConverter`` over X-VC's streaming forward pass."""
 
@@ -118,8 +147,23 @@ class XvcConverter:
         OmegaConf.save(cfg, str(out))
         return out
 
+    @staticmethod
+    def normalize(samples: np.ndarray) -> np.ndarray:
+        """Whole-signal level conditioning, as X-VC's ``process_audio`` does."""
+        return xvc_volume_normalize(samples)
+
+    def _highpass(self, array: np.ndarray) -> np.ndarray:
+        try:
+            import torchaudio.functional as taf  # type: ignore[import-not-found]
+        except Exception:  # noqa: BLE001 — optional; X-VC only cuts 40 Hz rumble
+            return array
+        tensor = self._torch.from_numpy(np.ascontiguousarray(array))
+        filtered = taf.highpass_biquad(tensor, self.sample_rate, XVC_HIGHPASS_HZ)
+        return filtered.numpy().astype(np.float32)
+
     def _tensor(self, samples: np.ndarray) -> Any:
         array = np.asarray(samples, dtype=np.float32).reshape(-1)
+        array = self._highpass(array)
         pad = (-array.size) % XVC_LATENT_HOP
         if pad:
             array = np.pad(array, (0, pad))
@@ -127,7 +171,7 @@ class XvcConverter:
 
     def set_reference(self, clip: np.ndarray, sample_rate: int) -> None:
         clip = _resample_linear(clip, sample_rate, self.sample_rate)
-        target = self._tensor(clip)
+        target = self._tensor(self.normalize(clip))
         self._speaker, self._frame = self._infer.precompute_conditions(
             self._model, target, target
         )
@@ -135,8 +179,13 @@ class XvcConverter:
     def convert_window(self, window: np.ndarray) -> np.ndarray:
         if self._speaker is None:
             raise RuntimeError("set_reference must be called before converting")
+        # render() normalises the whole Take up front; the live path has no
+        # whole signal, so each 2.4 s window is conditioned on its own.
         out = self._infer.run_stream_chunk_forward(
-            self._model, self._tensor(window), self._speaker, self._frame
+            self._model,
+            self._tensor(self.normalize(window)),
+            self._speaker,
+            self._frame,
         )
         audio = out.squeeze().detach().float().cpu().numpy()
         return np.asarray(audio, dtype=np.float32)[: window.size]
