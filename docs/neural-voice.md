@@ -147,7 +147,8 @@ What we learned the hard way:
   training losses use it. `descript-audiotools` pins `protobuf<3.20`, which conflicts
   with `onnxruntime` (qwen-tts), `wandb` and `tensorboard`, so it is **not** in the
   `neural` extra; `votr.neural_backends.ensure_audiotools_stub()` registers a stand-in
-  module for that one import when the real package is absent. If you had installed
+  module (constructible `STFTParams`/`AudioSignal`, DSP methods raise) when the real
+  package is absent, and the runtime yaml sets `loss_config: null` so no loss is built. If you had installed
   descript-audiotools by hand earlier, `pip uninstall descript-audiotools` and let pip
   put protobuf back where the other packages want it.
 - `flash-attn is not installed` is Qwen3-TTS choosing the slower attention; fine.

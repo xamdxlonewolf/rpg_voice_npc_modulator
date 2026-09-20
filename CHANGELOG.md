@@ -5,6 +5,11 @@ Windows installer artifacts are attached to GitHub Releases on `v*` tags.
 
 ## Unreleased
 
+- Neural: the `audiotools` stand-in is now constructible (X-VC builds
+  `STFTParams` while instantiating the model even for inference), and the
+  runtime yaml drops `loss_config`, so the Engine starts again without
+  `descript-audiotools`.
+
 - `pip install -e ".[neural]"` resolves again: `descript-audiotools` (pins
   `protobuf<3.20`, training-only for X-VC) and the protobuf floor are out of the
   extra; a stand-in module covers X-VC's single `audiotools` import.

@@ -339,9 +339,11 @@ def test_session_reports_why_the_engine_failed_to_start(
     assert session.neural_error == ""
 
 
-def test_audiotools_stub_satisfies_xvc_import_without_the_package(
+def test_audiotools_stub_is_constructible_like_xvc_needs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Michael's regression: hydra builds XVC with loss_config, which constructs
+    STFTParams; a raise-on-construct dummy killed inference."""
     import importlib
     import sys
 
@@ -354,10 +356,18 @@ def test_audiotools_stub_satisfies_xvc_import_without_the_package(
     assert getattr(module, "__votr_stub__", False)
     from audiotools import AudioSignal, STFTParams  # type: ignore[import-not-found]
 
+    # Exactly what MelSpectrogramLoss.__init__ does, for each window length.
+    params = [
+        STFTParams(window_length=w, hop_length=w // 4, match_stride=False)
+        for w in (2048, 512)
+    ]
+    assert params[0].window_length == 2048 and params[1].hop_length == 128
+    assert "STFTParams" in repr(params[0])
+    # AudioSignal can be built (loss forward does that); DSP on it cannot run.
+    signal = AudioSignal(np.zeros(10, np.float32), 16000)
+    assert signal.sample_rate == 16000
     with pytest.raises(RuntimeError, match="training"):
-        AudioSignal(np.zeros(10), 16000)
-    with pytest.raises(RuntimeError):
-        STFTParams()
+        signal.mel_spectrogram(80)
     # Second call is a no-op; an installed real package is never shadowed.
     assert neural_backends.ensure_audiotools_stub() is False
     monkeypatch.delitem(sys.modules, "audiotools", raising=False)
@@ -366,6 +376,98 @@ def test_audiotools_stub_satisfies_xvc_import_without_the_package(
     )
     assert neural_backends.ensure_audiotools_stub() is False
     assert "audiotools" not in sys.modules
+
+
+def test_xvc_target_constructs_with_loss_config_under_the_stub(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Replays hydra's instantiate(cfg.model.generator) against the stub with a
+    faithful copy of X-VC's loss-building code path."""
+    import sys
+
+    from votr import neural_backends
+
+    monkeypatch.delitem(sys.modules, "audiotools", raising=False)
+    monkeypatch.setattr(neural_backends.importlib.util, "find_spec", lambda name: None)
+    monkeypatch.setattr(neural_backends, "missing_runtime_packages", lambda: [])
+    pkg = tmp_path / "models" / "codec" / "sac"
+    (pkg / "blocks").mkdir(parents=True)
+    for folder in (
+        tmp_path / "models",
+        tmp_path / "models" / "codec",
+        pkg,
+        pkg / "blocks",
+    ):
+        (folder / "__init__.py").write_text("")
+    (pkg / "blocks" / "loss.py").write_text(
+        "from audiotools import AudioSignal, STFTParams\n"
+        "class MelSpectrogramLoss:\n"
+        "    def __init__(self, window_lengths=(2048, 512), "
+        "match_stride=False, **kw):\n"
+        "        self.stft_params = [STFTParams(window_length=w, hop_length=w // 4,"
+        " match_stride=match_stride) for w in window_lengths]\n"
+    )
+    (pkg / "model.py").write_text(
+        "from audiotools import AudioSignal\n"
+        "class XVC:\n"
+        "    def __init__(self, loss_config=None, **kwargs):\n"
+        "        self.loss_config = loss_config\n"
+        "        if loss_config is not None:\n"
+        "            from models.codec.sac.blocks import loss as losses\n"
+        "            self.compute_mel_loss = losses.MelSpectrogramLoss("
+        "**loss_config['mel_loss'])\n"
+    )
+    for name in [m for m in sys.modules if m == "models" or m.startswith("models.")]:
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    monkeypatch.syspath_prepend(str(tmp_path))
+    neural_backends.check_xvc_runtime(tmp_path)  # must not raise
+    import models.codec.sac.model as xvc_model  # type: ignore[import-not-found]
+
+    built = xvc_model.XVC(loss_config={"mel_loss": {"window_lengths": [2048, 512]}})
+    assert len(built.compute_mel_loss.stft_params) == 2
+    xvc_model.XVC(loss_config=None)
+
+
+def test_patch_xvc_config_points_at_pack_and_drops_loss_config(tmp_path: Path) -> None:
+    from votr.neural_backends import patch_xvc_config
+
+    cfg = {
+        "config": {
+            "model": {
+                "generator": {
+                    "_target_": "models.codec.sac.model.XVC",
+                    "loss_config": {"mel_loss": {"window_lengths": [2048, 512]}},
+                    "semantic_encoder": {
+                        "encoder": {
+                            "from_pretrained": {"hf_repo": "x", "local_ckpt": None}
+                        },
+                        "cfg": {"hf_repo": "x", "local_ckpt": None},
+                    },
+                    "speaker_encoder": {"pretrained_dir": "pretrained/eres2net"},
+                }
+            }
+        }
+    }
+    patched = patch_xvc_config(cfg, tmp_path)["config"]["model"]["generator"]
+    assert patched["loss_config"] is None
+    tokenizer = str(tmp_path / "glm-4-voice-tokenizer")
+    assert (
+        patched["semantic_encoder"]["encoder"]["from_pretrained"]["local_ckpt"]
+        == tokenizer
+    )
+    assert patched["semantic_encoder"]["cfg"]["local_ckpt"] == tokenizer
+    assert patched["speaker_encoder"]["pretrained_dir"].endswith(
+        "speech_eres2net_sv_en_voxceleb_16k"
+    )
+    flat = {
+        "model": {
+            "generator": {
+                "semantic_encoder": {"encoder": {"from_pretrained": {}}, "cfg": {}},
+                "speaker_encoder": {},
+            }
+        }
+    }
+    assert "loss_config" not in patch_xvc_config(flat, tmp_path)["model"]["generator"]
 
 
 def test_neural_extra_has_no_protobuf_fight() -> None:

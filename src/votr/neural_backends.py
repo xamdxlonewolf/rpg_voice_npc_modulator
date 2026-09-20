@@ -191,29 +191,80 @@ class XvcConverter:
         return np.asarray(audio, dtype=np.float32)[: window.size]
 
 
+class _StubSTFTParams:
+    """Constructible stand-in for ``audiotools.STFTParams`` (a namedtuple).
+
+    X-VC's ``MelSpectrogramLoss.__init__`` builds these even when hydra
+    instantiates the generator for inference; they are never *used* there.
+    """
+
+    __slots__ = (
+        "window_length",
+        "hop_length",
+        "window_type",
+        "match_stride",
+        "padding_type",
+    )
+
+    def __init__(
+        self,
+        window_length: int | None = None,
+        hop_length: int | None = None,
+        window_type: str | None = None,
+        match_stride: bool | None = None,
+        padding_type: str | None = None,
+    ) -> None:
+        self.window_length = window_length
+        self.hop_length = hop_length
+        self.window_type = window_type
+        self.match_stride = match_stride
+        self.padding_type = padding_type
+
+    def __repr__(self) -> str:
+        return (
+            f"STFTParams(window_length={self.window_length}, "
+            f"hop_length={self.hop_length}, window_type={self.window_type!r}, "
+            f"match_stride={self.match_stride}, padding_type={self.padding_type!r})"
+        )
+
+
+class _StubAudioSignal:
+    """Constructible stand-in for ``audiotools.AudioSignal``.
+
+    Holds the data and sample rate; any DSP method (``mel_spectrogram``,
+    ``loudness``, ``stft`` …) raises, because those only run in X-VC's
+    training losses, which the app never calls.
+    """
+
+    def __init__(
+        self, audio_data: object = None, sample_rate: int | None = None, **_kw: object
+    ):
+        self.audio_data = audio_data
+        self.sample_rate = sample_rate
+
+    def __getattr__(self, name: str) -> object:
+        raise RuntimeError(
+            f"audiotools.AudioSignal.{name} is only needed for X-VC training; install "
+            "descript-audiotools in a separate environment for that."
+        )
+
+
 def ensure_audiotools_stub() -> bool:
-    """Satisfy X-VC's ``from audiotools import AudioSignal`` without the package.
+    """Satisfy ``from audiotools import AudioSignal, STFTParams`` without the package.
 
     ``descript-audiotools`` pins ``protobuf<3.20``, which no modern
     onnxruntime/wandb/tensorboard accepts, so it cannot be a declared
-    dependency. X-VC only uses ``AudioSignal``/``STFTParams`` in its training
-    losses; inference merely imports the names. If the real package is
-    installed it is used; otherwise this placeholder module is registered.
-    Returns True when the stub was installed.
+    dependency. X-VC constructs ``STFTParams`` while building the model and
+    only *uses* ``AudioSignal`` in training losses, so constructible
+    stand-ins are enough for inference. If the real package is installed it
+    is used; otherwise this placeholder module is registered. Returns True
+    when the stub was installed.
     """
     if "audiotools" in sys.modules or importlib.util.find_spec("audiotools"):
         return False
-
-    class _TrainingOnly:
-        def __init__(self, *_args: object, **_kwargs: object) -> None:
-            raise RuntimeError(
-                "audiotools is only needed for X-VC training; install "
-                "descript-audiotools in a separate environment for that."
-            )
-
     stub = types.ModuleType("audiotools")
-    stub.__dict__["AudioSignal"] = type("AudioSignal", (_TrainingOnly,), {})
-    stub.__dict__["STFTParams"] = type("STFTParams", (_TrainingOnly,), {})
+    stub.__dict__["AudioSignal"] = _StubAudioSignal
+    stub.__dict__["STFTParams"] = _StubSTFTParams
     stub.__dict__["__votr_stub__"] = True
     sys.modules["audiotools"] = stub
     return True
@@ -277,6 +328,28 @@ class QwenVoiceDesign:
             text=text, language="English", instruct=instruct
         )
         return np.asarray(wavs[0], dtype=np.float32).reshape(-1), int(rate)
+
+
+def patch_xvc_config(cfg: Any, root: Path) -> Any:
+    """Rewrite X-VC's config in place for inference from the downloaded pack.
+
+    Works on a plain dict or an OmegaConf container. Points the semantic
+    encoder and speaker encoder at the pack files and drops ``loss_config``
+    so no training loss (and no ``audiotools`` object) is ever built.
+    """
+    body = cfg["config"] if "config" in cfg else cfg
+    generator = body["model"]["generator"]
+    tokenizer = str(Path(root) / "glm-4-voice-tokenizer")
+    generator["semantic_encoder"]["encoder"]["from_pretrained"]["local_ckpt"] = (
+        tokenizer
+    )
+    generator["semantic_encoder"]["cfg"]["local_ckpt"] = tokenizer
+    generator["speaker_encoder"]["pretrained_dir"] = str(
+        Path(root) / "speech_eres2net_sv_en_voxceleb_16k"
+    )
+    if "loss_config" in generator:
+        generator["loss_config"] = None
+    return cfg
 
 
 def _resample_linear(samples: np.ndarray, rate_in: int, rate_out: int) -> np.ndarray:
