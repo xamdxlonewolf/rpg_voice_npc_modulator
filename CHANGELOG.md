@@ -19,7 +19,7 @@ Windows installer artifacts are attached to GitHub Releases on `v*` tags.
   opt-in model pack download in Settings → Neural (sizes, licences incl. the
   GLM-4-Voice caveat, resume, checksum, cancel; NVIDIA ≥ 6 GiB only); neural Voice
   design from Tone Hints via Qwen3-TTS VoiceDesign when installed, lexicon
-  fallback otherwise. Nothing bundled; unverified on real hardware so far.
+  fallback otherwise. Nothing bundled; verified on a Windows 11 / Python 3.13 box.
 
 - Presets: a Voice saved from a preset now remembers it (`preset` field), so
   choosing that preset again opens your saved Voice instead of a new bundled

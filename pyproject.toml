@@ -55,6 +55,9 @@ neural = [
     "wandb>=0.18",
     "tqdm>=4.66",
     "qwen-tts>=0.1.1",
+    # descript-audiotools pins protobuf<3.20; onnxruntime/wandb/tensorboard
+    # need >=6. Ask for the modern one so the resolver does not downgrade.
+    "protobuf>=6.31.1,<8",
 ]
 
 [project.scripts]

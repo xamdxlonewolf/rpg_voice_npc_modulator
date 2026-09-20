@@ -9,8 +9,9 @@ and ``ReferenceClipMaker``. They import torch lazily and only run when the
 model packs are installed and an NVIDIA GPU is present.
 
 Written against the upstream sources as of X-VC commit 49df8c5 and qwen-tts
-0.1.1; **not yet exercised on real hardware by this project.** Expect the
-first run on a GPU box to surface small API mismatches — keep changes here.
+0.1.1. Both adapters were exercised on Michael's Windows 11 box (Python 3.13,
+CUDA torch 2.9, transformers 4.46) on 2026-09-20: X-VC converts a Take and
+Qwen3-TTS produces a reference clip. Keep model-facing fixes in this file.
 """
 
 from __future__ import annotations
