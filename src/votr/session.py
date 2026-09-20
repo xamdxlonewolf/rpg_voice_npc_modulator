@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from votr.clips import REFERENCE_CLIP_ID_KEY, Clip, ClipLibrary
 from votr.devices import DeviceSettings
 from votr.dsp import DspEngine
 from votr.latency import (
@@ -25,7 +26,7 @@ from votr.neural import (
     build_neural_engine,
     probe_runtime,
 )
-from votr.neural_engine import NeuralEngine, NeuralUnavailable
+from votr.neural_engine import REFERENCE_CLIP_KEY, NeuralEngine, NeuralUnavailable
 from votr.presets import load_presets, preset_by_name, voice_from_preset
 from votr.roleplay import RoleplayError, RoleplayPath
 from votr.store import VoiceStore
@@ -39,6 +40,7 @@ log = logging.getLogger("votr.session")
 class Session:
     def __init__(self, data_dir: Path | None = None) -> None:
         self.store = VoiceStore(data_dir)
+        self.clips = ClipLibrary(self.store.root.parent)
         self.macros = load_macros()
         self.presets = load_presets()
         self.settings = DeviceSettings.load(self.store.root.parent)
@@ -89,9 +91,49 @@ class Session:
         if self.draft.engine_id == NEURAL_ENGINE_ID:
             engine = self.ensure_neural_engine()
             if engine is not None:
-                engine.set_params(self.draft.params)
+                engine.set_params(self.resolved_params(self.draft.params))
                 return engine
         return self.engine
+
+    def resolved_params(self, params: dict) -> dict:
+        """Point ``reference_clip`` at the library file for ``reference_clip_id``.
+
+        The id is what a Voice really stores; the path is derived so a moved
+        data folder or a re-imported clip does not strand the Voice.
+        """
+        merged = dict(params)
+        clip_id = str(merged.get(REFERENCE_CLIP_ID_KEY) or "")
+        if clip_id:
+            path = self.clips.path_for(clip_id)
+            if path.is_file():
+                merged[REFERENCE_CLIP_KEY] = str(path)
+        return merged
+
+    def set_engine_kind(self, engine_id: str) -> None:
+        """Switch the draft between the DSP Engine and the Neural mimic Engine."""
+        if engine_id not in (DSP_ENGINE_ID, NEURAL_ENGINE_ID):
+            return
+        self.draft.engine_id = engine_id
+        if engine_id == NEURAL_ENGINE_ID:
+            self.draft.params.setdefault("mix", 1.0)
+
+    def use_clip(self, clip_id: str) -> Clip | None:
+        """Make ``clip_id`` the draft's mimic reference; updates a loaded Engine."""
+        clip = self.clips.get(clip_id)
+        if clip is None:
+            return None
+        self.draft.params[REFERENCE_CLIP_ID_KEY] = clip.id
+        self.draft.params[REFERENCE_CLIP_KEY] = str(self.clips.path_for(clip.id))
+        if self.neural_engine is not None and self.draft.engine_id == NEURAL_ENGINE_ID:
+            self.neural_engine.set_params(self.resolved_params(self.draft.params))
+        return clip
+
+    def draft_clip(self) -> Clip | None:
+        return self.clips.get(str(self.draft.params.get(REFERENCE_CLIP_ID_KEY) or ""))
+
+    def clear_clip(self) -> None:
+        self.draft.params.pop(REFERENCE_CLIP_ID_KEY, None)
+        self.draft.params.pop(REFERENCE_CLIP_KEY, None)
 
     def voice_by_id(self, voice_id: str) -> Voice | None:
         return next((voice for voice in self.voices if voice.id == voice_id), None)

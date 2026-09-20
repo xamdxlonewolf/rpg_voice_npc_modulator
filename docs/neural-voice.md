@@ -156,7 +156,24 @@ What we learned the hard way:
    transformers ≥ 4.46 with the rewritten yaml. Fixes belong in
    `votr/neural_backends.py`.
 2. **Roleplay Mode** still uses the DSP Engine for Neural Voices (S7.4 next slice).
-3. **No reference-clip picker** in the editor; a Neural Voice is made by "Design from
-   Tone Hints" (with the VoiceDesign pack) or by editing the Voice JSON.
-4. **Installer** does not carry the runtime; source checkout required.
-5. **Quality and latency numbers** are the publishers'; nothing measured here yet.
+3. **Installer** does not carry the runtime; source checkout required.
+4. **Quality and latency numbers** are the publishers'; nothing measured here yet.
+
+## Making a Neural Voice in the editor (mimic clips)
+
+In the Voice editor, the **Engine** dropdown switches between *Your voice, shaped
+(DSP)* and *Mimic a clip (Neural)*. Choosing Neural hides the sliders and shows the
+**Mimic clip** panel:
+
+- **Record (30 s max)** — records from the mic with a remaining-time bar, auto-stops at
+  30 s, asks for a name, saves the clip and uses it.
+- **Upload…** — WAV, FLAC, MP3, OGG, AIFF; decoded with Pedalboard, resampled to 48 kHz,
+  silence trimmed, capped at 30 s.
+- Dropdown + **Use this clip** — pick any library clip for this Voice; **Rename…** and
+  **Delete** manage the library.
+
+Clips live in `<data folder>/clips/` as `<id>.wav` + `<id>.json`. A Voice stores
+`reference_clip_id` (authoritative) and `reference_clip` (path, re-derived from the id on
+load). "Design from Tone Hints" with the VoiceDesign pack drops its generated clip into
+the same library. The library, recording and saving work without the Neural Engine;
+Preview then plays the dry Take and the Engine row says why.

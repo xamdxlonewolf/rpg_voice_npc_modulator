@@ -186,3 +186,108 @@ def test_settings_download_is_gated_and_runs_off_thread(
         assert "Download finished" in dialog.neural_report.text()
     finally:
         server.stop()
+
+
+@pytest.mark.skipif(not stretch_available(), reason="DSP Engine needs python-stretch")
+def test_editor_neural_voice_picks_uploads_and_records_clips(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _require_qt()
+    import numpy as np
+
+    from votr.app import create_application, create_main_window
+    from votr.clips import CLIP_SAMPLE_RATE, REFERENCE_CLIP_ID_KEY
+    from votr.neural_engine import NEURAL_ENGINE_ID, REFERENCE_CLIP_KEY
+    from votr.ui import clips_panel
+    from votr.wavutil import write_wav
+
+    create_application(["votr-clips-test"])
+    session = Session(tmp_path)
+    window = create_main_window(session)
+    editor = window.editor
+    window.show_new_editor()
+    # DSP by default: sliders shown, mimic panel hidden.
+    assert editor.engine_box.currentData() == "dsp-v1"
+    assert not editor.mimic.isVisibleTo(editor)
+    assert editor.sliders_box.isVisibleTo(editor)
+
+    # Switch to Neural: mimic panel appears, honest status, no clips yet.
+    editor.engine_box.setCurrentIndex(1)
+    assert session.draft.engine_id == NEURAL_ENGINE_ID
+    assert editor.mimic.isVisibleTo(editor)
+    assert not editor.sliders_box.isVisibleTo(editor)
+    assert "not ready" in editor.engine_status.text()
+    assert "No clips yet" in editor.mimic.clip_box.currentText()
+    assert not editor.mimic.use_button.isEnabled()
+
+    # Upload a file: added to the library and used by the draft.
+    wav = tmp_path / "ogre.wav"
+    t = np.arange(CLIP_SAMPLE_RATE * 4) / CLIP_SAMPLE_RATE
+    write_wav(
+        wav, (0.3 * np.sin(2 * np.pi * 120 * t)).astype(np.float32), CLIP_SAMPLE_RATE
+    )
+    assert editor.mimic.add_file(wav)
+    ogre = session.clips.by_name("ogre")
+    assert ogre is not None
+    assert session.draft.params[REFERENCE_CLIP_ID_KEY] == ogre.id
+    assert "ogre" in editor.mimic.status.text()
+
+    # Record: fake the microphone, feed 3 s, stop with a name; capped label shows 30 s.
+    class FakeStream:
+        def __init__(self, *, callback, **_kwargs):
+            self._callback = callback
+
+        def start(self):
+            block = (0.2 * np.sin(np.arange(CLIP_SAMPLE_RATE * 3) / 30.0)).astype(
+                np.float32
+            )
+            self._callback(block[:, None], block.size, None, None)
+
+        def stop(self):
+            return None
+
+        def close(self):
+            return None
+
+    import types
+
+    fake_sd = types.SimpleNamespace(InputStream=FakeStream)
+    monkeypatch.setitem(sys.modules, "sounddevice", fake_sd)
+    monkeypatch.setattr(clips_panel, "input_devices", lambda: [{"name": "fake mic"}])
+    assert "30 s" in editor.mimic.record_button.text()
+    assert editor.mimic.start_recording()
+    assert "left" in editor.mimic.status.text()
+    assert editor.mimic.stop_recording(name="Ogre take 2")
+    recorded = session.clips.by_name("Ogre take 2")
+    assert recorded is not None and 2.5 <= recorded.seconds <= 3.1
+    assert session.draft.params[REFERENCE_CLIP_ID_KEY] == recorded.id
+
+    # Select the first clip again from the dropdown and use it.
+    editor.mimic.clip_box.setCurrentIndex(editor.mimic.clip_box.findData(ogre.id))
+    editor.mimic.use_selected()
+    assert session.draft.params[REFERENCE_CLIP_ID_KEY] == ogre.id
+    assert session.draft.params[REFERENCE_CLIP_KEY].endswith(f"{ogre.id}.wav")
+
+    # Rename and delete through the panel.
+    editor.mimic.clip_box.setCurrentIndex(editor.mimic.clip_box.findData(recorded.id))
+    assert editor.mimic.rename_selected("Ogre B")
+    assert session.clips.get(recorded.id).name == "Ogre B"
+    assert editor.mimic.delete_selected()
+    assert session.clips.get(recorded.id) is None
+    assert (
+        session.draft.params[REFERENCE_CLIP_ID_KEY] == ogre.id
+    )  # other clip untouched
+
+    # Save, reopen from disk: engine and clip persist; back to DSP shows sliders.
+    editor.name_edit.setText("Ogre chief")
+    editor.save()
+    reopened = Session(tmp_path)
+    voice = next(v for v in reopened.voices if v.name == "Ogre chief")
+    assert voice.engine_id == NEURAL_ENGINE_ID
+    assert voice.params[REFERENCE_CLIP_ID_KEY] == ogre.id
+    window.show_editor(voice.id)
+    assert editor.engine_box.currentData() == NEURAL_ENGINE_ID
+    assert editor.mimic.clip_box.currentData() == ogre.id
+    editor.engine_box.setCurrentIndex(0)
+    assert session.draft.engine_id == "dsp-v1"
+    assert editor.sliders_box.isVisibleTo(editor)

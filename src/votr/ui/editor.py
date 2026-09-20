@@ -25,9 +25,10 @@ from PySide6.QtWidgets import (
 )
 
 from votr.neural import NEURAL_ENGINE_ID
-from votr.neural_engine import REFERENCE_CLIP_KEY
 from votr.session import Session
+from votr.ui.clips_panel import MimicClipPanel
 from votr.ui.preview_panel import PreviewPanel
+from votr.voice import DSP_ENGINE_ID
 
 
 class VoiceEditor(QWidget):
@@ -118,6 +119,31 @@ class VoiceEditor(QWidget):
         tags_layout.addLayout(self.tag_bar)
         root.addWidget(tags)
 
+        engine_row = QHBoxLayout()
+        engine_row.addWidget(QLabel("Engine"))
+        self.engine_box = QComboBox()
+        self.engine_box.setObjectName("engine_box")
+        self.engine_box.addItem(
+            "Your voice, shaped (DSP — works everywhere)", DSP_ENGINE_ID
+        )
+        self.engine_box.addItem("Mimic a clip (Neural — NVIDIA GPU)", NEURAL_ENGINE_ID)
+        self.engine_box.setToolTip(
+            "DSP shapes your own voice with the sliders. Neural converts your voice "
+            "toward a mimic clip; it needs the Neural Engine (Settings → Neural), "
+            "but you can prepare clips and Voices without it."
+        )
+        self.engine_box.currentIndexChanged.connect(self._on_engine)
+        self.engine_status = QLabel()
+        self.engine_status.setObjectName("engine_status")
+        self.engine_status.setWordWrap(True)
+        engine_row.addWidget(self.engine_box, 1)
+        root.addLayout(engine_row)
+        root.addWidget(self.engine_status)
+
+        self.mimic = MimicClipPanel(self.session)
+        self.mimic.clip_chosen.connect(self._on_clip_chosen)
+        root.addWidget(self.mimic)
+
         sliders = QGroupBox("Sound")
         self.sliders_box = sliders
         slider_form = QFormLayout(sliders)
@@ -163,19 +189,25 @@ class VoiceEditor(QWidget):
         self._refresh_preset_labels()
         draft = self.session.draft
         neural = draft.engine_id == NEURAL_ENGINE_ID
-        self.sliders_box.setEnabled(not neural)
+        self.engine_box.blockSignals(True)
+        self.engine_box.setCurrentIndex(1 if neural else 0)
+        self.engine_box.blockSignals(False)
+        self.mimic.setVisible(neural)
+        self.sliders_box.setVisible(not neural)
+        self.engine_status.setVisible(neural)
         if neural:
-            clip = str(draft.params.get(REFERENCE_CLIP_KEY, "")) or "none"
-            ready = (
-                "ready"
-                if self.session.engine_installed(NEURAL_ENGINE_ID)
-                else (f"not ready — {self.session.neural.reason}")
-            )
-            self.sliders_box.setTitle(f"Sound — Neural Voice (Engine {ready})")
-            self.sliders_box.setToolTip(f"Reference clip: {clip}")
-        else:
-            self.sliders_box.setTitle("Sound")
-            self.sliders_box.setToolTip("")
+            self.mimic.refresh()
+            if self.session.neural_error:
+                state = self.session.neural_error
+            elif self.session.engine_installed(NEURAL_ENGINE_ID):
+                state = "Neural Engine ready — Preview converts your Take."
+            else:
+                state = (
+                    f"Neural Engine not ready ({self.session.neural.reason}). You can "
+                    "still pick or record a clip and Save; Preview plays your dry "
+                    "voice until the Engine runs."
+                )
+            self.engine_status.setText(state)
         self.name_edit.setText(draft.name)
         self.hints_edit.setPlainText(draft.tone_hints)
         self._set_colour_button(draft.colour)
@@ -263,6 +295,18 @@ class VoiceEditor(QWidget):
 
     def _fresh_preset(self) -> None:
         self._use_preset(fresh=True)
+
+    def _on_engine(self, index: int) -> None:
+        if self._loading:
+            return
+        engine_id = str(self.engine_box.itemData(index) or DSP_ENGINE_ID)
+        self.session.set_engine_kind(engine_id)
+        self.reload_from_draft()
+        self.preview.schedule_replay()
+
+    def _on_clip_chosen(self, _clip_id: str) -> None:
+        self.reload_from_draft()
+        self.preview.schedule_replay()
 
     def design_from_hints(self) -> None:
         prompt = self.hints_edit.toPlainText()
