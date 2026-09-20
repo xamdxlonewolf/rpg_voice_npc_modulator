@@ -26,6 +26,9 @@ dev = [
 rubberband = [
     "rubband>=0.3",
 ]
+bundle = [
+    "pyinstaller>=6.0",
+]
 
 [project.scripts]
 votr = "votr.__main__:main"
