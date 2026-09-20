@@ -26,6 +26,7 @@ from votr import WINDOW_TITLE, __version__
 from votr.devices import find_cable_input, mic_devices
 from votr.latency import format_latency_report
 from votr.live import query_devices
+from votr.neural import detect_nvidia_gpu, neural_status
 from votr.paths import license_path, notices_path
 from votr.preview import speaker_devices
 from votr.session import Session
@@ -44,6 +45,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(self._devices_tab(), "Devices")
         tabs.addTab(self._latency_tab(), "Latency")
         tabs.addTab(self._general_tab(), "General")
+        tabs.addTab(self._neural_tab(), "Neural")
         tabs.addTab(self._about_tab(), "About")
         root.addWidget(tabs)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
@@ -108,9 +110,7 @@ class SettingsDialog(QDialog):
     def _general_tab(self) -> QWidget:
         page = QWidget()
         layout = QFormLayout(page)
-        self.hotkey = QKeySequenceEdit(
-            QKeySequence(self.session.settings.panic_hotkey)
-        )
+        self.hotkey = QKeySequenceEdit(QKeySequence(self.session.settings.panic_hotkey))
         layout.addRow("Panic mute", self.hotkey)
         hint = QLabel(
             "In-app shortcut (available while Voice of the Realm is focused)."
@@ -125,6 +125,19 @@ class SettingsDialog(QDialog):
         open_voices = QPushButton("Open Voices folder")
         open_voices.clicked.connect(self._open_voices)
         layout.addRow(open_voices)
+        return page
+
+    def _neural_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        self.neural_report = QLabel(neural_status(detect_nvidia_gpu()))
+        self.neural_report.setWordWrap(True)
+        self.neural_report.setObjectName("neural_report")
+        self.neural_report.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        layout.addWidget(self.neural_report)
+        layout.addStretch()
         return page
 
     def _about_tab(self) -> QWidget:
@@ -143,9 +156,7 @@ class SettingsDialog(QDialog):
         if license_file is not None:
             lic = QPushButton("LICENSE")
             lic.clicked.connect(
-                lambda: QDesktopServices.openUrl(
-                    QUrl.fromLocalFile(str(license_file))
-                )
+                lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(license_file)))
             )
             layout.addWidget(lic)
         layout.addStretch()
@@ -181,9 +192,7 @@ class SettingsDialog(QDialog):
         self.session.apply_latency_quality(quality)
 
     def _open_voices(self) -> None:
-        QDesktopServices.openUrl(
-            QUrl.fromLocalFile(str(self.session.store.root))
-        )
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.session.store.root)))
 
     def _save(self) -> None:
         self.session.settings.mic_name = str(self.mic.currentData() or "")

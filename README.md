@@ -22,7 +22,11 @@ pip install -e ".[dev]"
 python -m votr
 ```
 
-That opens an empty PySide6 window titled **Voice of the Realm**.
+That opens the **Voice of the Realm** window. In the editor, "Use preset" loads a
+named starting point and "Design from Tone Hints" turns a description like *a
+gravelly old dwarf in a great hall* into Tone Tags and sliders — offline, CPU-only.
+What neural voice work is and is not feasible locally is in
+[`docs/neural-voice.md`](docs/neural-voice.md).
 
 ## Tests and lint
 

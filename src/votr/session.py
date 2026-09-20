@@ -18,9 +18,11 @@ from votr.latency import (
 from votr.latency import run_latency_test as probe_latency
 from votr.live import AudioDeviceError
 from votr.macros import load_macros
+from votr.presets import load_presets, preset_by_name, voice_from_preset
 from votr.roleplay import RoleplayError, RoleplayPath
 from votr.store import VoiceStore
 from votr.voice import DSP_ENGINE_ID, Voice
+from votr.voicedesign import VoiceDesign, design_voice
 
 INSTALLED_ENGINE_IDS = {DSP_ENGINE_ID, "passthrough"}
 
@@ -29,6 +31,7 @@ class Session:
     def __init__(self, data_dir: Path | None = None) -> None:
         self.store = VoiceStore(data_dir)
         self.macros = load_macros()
+        self.presets = load_presets()
         self.settings = DeviceSettings.load(self.store.root.parent)
         block = self.settings.block_size or None
         self.engine = DspEngine(macros=self.macros, block_size=block)
@@ -114,6 +117,28 @@ class Session:
         self._saved = self.draft.to_dict()
         defaults = {spec.key: spec.default for spec in self.engine.parameter_schema()}
         self.engine.set_params(defaults)
+
+    def edit_from_preset(self, name: str) -> Voice | None:
+        """Start a new, unsaved draft from a bundled preset."""
+        preset = preset_by_name(self.presets, name)
+        if preset is None:
+            return None
+        self.draft = voice_from_preset(preset)
+        self._saved = Voice.new().to_dict()
+        self.apply_draft_to_engine()
+        return self.draft
+
+    def design_from_hints(self, prompt: str | None = None) -> VoiceDesign:
+        """Prompt → Voice: fill the draft's tags and sliders from its Tone Hints."""
+        text = prompt if prompt is not None else self.draft.tone_hints
+        design = design_voice(text, self.macros)
+        self.draft.tone_hints = text
+        self.draft.tone_tags = list(design.tone_tags)
+        self.draft.params = dict(design.params)
+        if not self.draft.name.strip() or self.draft.name == "New Voice":
+            self.draft.name = design.name
+        self.apply_draft_to_engine()
+        return design
 
     def set_active(self, voice_id: str) -> Voice | None:
         voice = self.voice_by_id(voice_id)
