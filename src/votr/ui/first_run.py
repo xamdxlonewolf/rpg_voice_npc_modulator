@@ -17,21 +17,30 @@ from PySide6.QtWidgets import (
 
 from votr.latency import format_latency_report
 from votr.session import Session
+from votr.ui.theme import apply_wizard_theme
 from votr.ui.wizard import CablePage, DevicesPage, DiscordPage, SummaryPage
 
 
 class WelcomePage(QWizardPage):
     def __init__(self) -> None:
         super().__init__()
-        self.setTitle("Welcome")
-        self.setSubTitle("Voice of the Realm")
+        self.setTitle("Voice of the Realm")
+        self.setSubTitle("Local character voices for an online Game Master")
         body = QLabel(
-            "This setup picks a microphone and speakers, looks for a Virtual "
-            "Cable (it never installs one), runs a Latency Test, and shows "
-            "how Discord should use CABLE Output. You can skip and do this "
-            "later from Settings."
+            "Create a Voice for each NPC, preview it on your speakers, then "
+            "speak through it into Discord. Only the Character Voice reaches "
+            "the Virtual Cable — your Dry Voice never does.\n\n"
+            "This first-run setup will:\n"
+            "1. Look for a Virtual Cable (the app never installs one; it "
+            "links you to VB-CABLE if needed).\n"
+            "2. Let you pick your microphone and speakers.\n"
+            "3. Run a Latency Test for this machine.\n"
+            "4. Show you how Discord should use CABLE Output.\n\n"
+            "You can skip and do this later from Settings."
         )
         body.setWordWrap(True)
+        body.setObjectName("welcome_body")
+        self.body = body
         QVBoxLayout(self).addWidget(body)
 
 
@@ -94,8 +103,8 @@ class FirstRunWizard(QWizard):
     def __init__(self, session: Session, parent=None) -> None:
         super().__init__(parent)
         self.session = session
-        self.setWindowTitle("First-run setup")
         self.setObjectName("first_run_wizard")
+        apply_wizard_theme(self, title="Voice of the Realm — First-run setup")
         self.setButtonText(QWizard.WizardButton.CancelButton, "Skip")
         self.welcome_page = WelcomePage()
         self.cable_page = CablePage(session)

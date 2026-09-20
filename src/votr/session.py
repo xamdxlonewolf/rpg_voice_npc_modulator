@@ -55,8 +55,13 @@ class Session:
         self.voices = [item for item in self.voices if item.id != voice.id]
         self.voices.append(voice)
 
+    def full_params(self, params: dict | None = None) -> dict:
+        merged = {spec.key: spec.default for spec in self.engine.parameter_schema()}
+        merged.update(params or {})
+        return merged
+
     def apply_draft_to_engine(self) -> None:
-        self.engine.set_params(self.draft.params)
+        self.engine.set_params(self.full_params(self.draft.params))
 
     def apply_tag(self, tag: str) -> None:
         if tag not in self.macros:
@@ -118,7 +123,7 @@ class Session:
         self.store.save(voice)
         self.active_id = voice.id
         fade = 30.0 if self.roleplay_on else 0.0
-        self.engine.set_params(voice.params, crossfade_ms=fade)
+        self.engine.set_params(self.full_params(voice.params), crossfade_ms=fade)
         return voice
 
     def active_voice(self) -> Voice | None:

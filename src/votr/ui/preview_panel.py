@@ -160,7 +160,7 @@ class PreviewPanel(QWidget):
             self.session.take = take
         if voice_params is not None:
             saved = self.session.engine.params()
-            self.session.engine.set_params(voice_params)
+            self.session.engine.set_params(self.session.full_params(voice_params))
         else:
             saved = None
             self.session.apply_draft_to_engine()

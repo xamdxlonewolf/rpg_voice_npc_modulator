@@ -35,6 +35,7 @@ from votr.devices import (
 from votr.live import query_devices
 from votr.preview import speaker_devices
 from votr.session import Session
+from votr.ui.theme import apply_wizard_theme
 
 
 def _open_url(url: str) -> None:
@@ -230,8 +231,8 @@ class DiscordWizard(QWizard):
     def __init__(self, session: Session, parent=None) -> None:
         super().__init__(parent)
         self.session = session
-        self.setWindowTitle("Discord setup")
         self.setObjectName("discord_wizard")
+        apply_wizard_theme(self, title="Voice of the Realm — Discord setup")
         self.cable_page = CablePage(session)
         self.devices_page = DevicesPage(session)
         self.discord_page = DiscordPage(session)
