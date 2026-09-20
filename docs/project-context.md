@@ -72,9 +72,10 @@ Other settled points (grill round 1, `docs/grill-round-1.md`):
 ## Explicitly out of scope for the rough draft
 
 - In-person table play, room speakers, feedback suppression (ADR-0002).
-- Neural Engine itself and model downloads (later epic in `docs/backlog.md`). GPU
-  detection, the designer/Engine seam and an honest status page **are** in (E7, first
-  slice); nothing neural is installed or downloaded.
+- Bundling anything neural. The Neural Engine (`neural-v0`, X-VC), the opt-in model
+  pack download and the neural Voice designer **are** in (E7); they run only on an
+  NVIDIA GPU ≥ 6 GiB with CUDA PyTorch and the packs the GM chose to download. Roleplay
+  Mode with a Neural Voice is not wired yet (`docs/neural-voice.md`).
 - Live accent conversion of the GM's own speech. Voice conversion moves timbre, not
   pronunciation; the app will not pretend otherwise (`docs/neural-voice.md`).
 - Cloud sync, accounts, sharing marketplace.

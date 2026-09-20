@@ -24,6 +24,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from votr.neural import NEURAL_ENGINE_ID
+from votr.neural_engine import REFERENCE_CLIP_KEY
 from votr.session import Session
 from votr.ui.preview_panel import PreviewPanel
 
@@ -117,6 +119,7 @@ class VoiceEditor(QWidget):
         root.addWidget(tags)
 
         sliders = QGroupBox("Sound")
+        self.sliders_box = sliders
         slider_form = QFormLayout(sliders)
         for spec in self.session.engine.parameter_schema():
             row = QHBoxLayout()
@@ -159,6 +162,20 @@ class VoiceEditor(QWidget):
         self._loading = True
         self._refresh_preset_labels()
         draft = self.session.draft
+        neural = draft.engine_id == NEURAL_ENGINE_ID
+        self.sliders_box.setEnabled(not neural)
+        if neural:
+            clip = str(draft.params.get(REFERENCE_CLIP_KEY, "")) or "none"
+            ready = (
+                "ready"
+                if self.session.engine_installed(NEURAL_ENGINE_ID)
+                else (f"not ready — {self.session.neural.reason}")
+            )
+            self.sliders_box.setTitle(f"Sound — Neural Voice (Engine {ready})")
+            self.sliders_box.setToolTip(f"Reference clip: {clip}")
+        else:
+            self.sliders_box.setTitle("Sound")
+            self.sliders_box.setToolTip("")
         self.name_edit.setText(draft.name)
         self.hints_edit.setPlainText(draft.tone_hints)
         self._set_colour_button(draft.colour)

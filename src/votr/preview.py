@@ -11,8 +11,7 @@ from typing import Any
 
 import numpy as np
 
-from votr.dsp import DspEngine
-from votr.engine import DEFAULT_SAMPLE_RATE
+from votr.engine import DEFAULT_SAMPLE_RATE, Engine
 from votr.live import query_devices
 from votr.wavutil import read_wav, write_wav
 
@@ -68,7 +67,7 @@ def speaker_devices(
     return speakers
 
 
-def render_take(engine: DspEngine, take: np.ndarray) -> np.ndarray:
+def render_take(engine: Engine, take: np.ndarray) -> np.ndarray:
     return engine.render(np.asarray(take, dtype=np.float32))
 
 

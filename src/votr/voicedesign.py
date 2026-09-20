@@ -20,6 +20,7 @@ from typing import Protocol
 
 from votr.dsp import SCHEMA
 from votr.macros import Macro, apply_macros, load_macros
+from votr.voice import DSP_ENGINE_ID
 
 _SCHEMA = {spec.key: spec for spec in SCHEMA}
 
@@ -313,6 +314,7 @@ class VoiceDesign:
     matched: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     designer: str = "lexicon"
+    engine_id: str = DSP_ENGINE_ID
 
 
 class VoiceDesigner(Protocol):
@@ -407,17 +409,35 @@ class LexiconDesigner:
         )
 
 
-def designers(macros: dict[str, Macro] | None = None) -> list[VoiceDesigner]:
-    """Best first. The neural seam is listed so the UI can say why it is off."""
+def designers(
+    macros: dict[str, Macro] | None = None, runtime: object | None = None
+) -> list[VoiceDesigner]:
+    """Best first. The neural designer is listed so the UI can say why it is off."""
     from votr.neural import NeuralDesigner
 
-    return [NeuralDesigner(), LexiconDesigner(macros)]
+    return [NeuralDesigner(runtime), LexiconDesigner(macros)]  # type: ignore[arg-type]
 
 
-def design_voice(prompt: str, macros: dict[str, Macro] | None = None) -> VoiceDesign:
-    """Use the first available designer (the lexicon one always is)."""
-    for designer in designers(macros):
+def design_voice(
+    prompt: str,
+    macros: dict[str, Macro] | None = None,
+    runtime: object | None = None,
+) -> VoiceDesign:
+    """First designer that is available *and* succeeds; failures become notes.
+
+    A neural designer whose model refuses to load must never take the Voice
+    editor down with it — the lexicon designer is always the last resort.
+    """
+    failures: list[str] = []
+    for designer in designers(macros, runtime):
         ok, _reason = designer.available()
-        if ok:
-            return designer.design(prompt)
+        if not ok:
+            continue
+        try:
+            result = designer.design(prompt)
+        except Exception as exc:  # noqa: BLE001 — fall back, report why
+            failures.append(f"{designer.designer_id} designer failed: {exc}")
+            continue
+        result.notes = failures + result.notes
+        return result
     raise RuntimeError("no Voice designer is available")

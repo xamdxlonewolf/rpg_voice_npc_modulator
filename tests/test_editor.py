@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -103,4 +104,85 @@ def test_settings_has_an_honest_neural_tab(tmp_path: Path) -> None:
     dialog = SettingsDialog(Session(tmp_path))
     text = dialog.neural_report.text()
     assert "Neural Engine" in text
-    assert "not installed" in text
+    assert "not downloaded" in text
+    assert "accent" in text.lower()
+    # No GPU on this machine: packs are listed with size and licences, but the
+    # download buttons stay off even after acknowledging the licences.
+    button = dialog.pack_buttons["xvc"]
+    assert "GB" in button.text()
+    assert not button.isEnabled()
+    dialog.licence_ack.setChecked(True)
+    assert not button.isEnabled()
+    assert "NVIDIA" in button.toolTip()
+    assert dialog.pack_labels["xvc"].text() == "Not downloaded."
+    assert not dialog.pack_progress.isVisible()
+
+
+def test_settings_download_is_gated_and_runs_off_thread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _require_qt()
+    import hashlib
+
+    from PySide6.QtCore import QCoreApplication, QEventLoop, QTimer
+
+    from votr import neural as neural_module
+    from votr.app import create_application
+    from votr.neural import GpuInfo, probe_runtime
+    from votr.neural_pack import ModelPack, PackFile
+    from votr.ui import settings as settings_ui
+    from votr.ui.settings import SettingsDialog
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from test_neural_pack import _RangeServer
+
+    payload = b"weights" * 1000
+    server = _RangeServer({"w.bin": payload})
+    server.start()
+    try:
+        pack = ModelPack(
+            "xvc",
+            "Fake X-VC",
+            "test",
+            (
+                PackFile(
+                    "xvc/xvc.pt",
+                    server.url + "w.bin",
+                    len(payload),
+                    hashlib.sha256(payload).hexdigest(),
+                    "MIT",
+                ),
+            ),
+            ("MIT",),
+        )
+        monkeypatch.setattr(settings_ui, "PACKS", (pack,))
+        monkeypatch.setattr(neural_module, "CONVERSION_PACK", pack)
+        monkeypatch.setattr(
+            neural_module, "torch_cuda_state", lambda: (True, True, "ok")
+        )
+        create_application(["votr-neural-download"])
+        session = Session(tmp_path)
+        session.neural = probe_runtime(
+            tmp_path,
+            gpu=GpuInfo("RTX 3060", 12288),
+            torch_state=lambda: (True, True, "ok"),
+        )
+        dialog = SettingsDialog(session)
+        button = dialog.pack_buttons["xvc"]
+        assert not button.isEnabled() and "licence" in button.toolTip().lower()
+        dialog.licence_ack.setChecked(True)
+        assert button.isEnabled()
+        dialog._download("xvc")
+        assert dialog.pack_cancel.isVisible() or dialog._worker is not None
+        loop = QEventLoop()
+        dialog._worker.finished.connect(loop.quit)
+        QTimer.singleShot(10_000, loop.quit)
+        if dialog._worker.isRunning():
+            loop.exec()
+        QCoreApplication.processEvents()
+        assert (tmp_path / "neural" / "xvc" / "xvc.pt").read_bytes() == payload
+        assert dialog.pack_labels["xvc"].text() == "Installed."
+        assert not button.isEnabled() and button.text() == "Installed"
+        assert "Download finished" in dialog.neural_report.text()
+    finally:
+        server.stop()

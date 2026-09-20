@@ -1,6 +1,6 @@
 # Neural voice — what is real, what is not (E7)
 
-Status: 2026-09-20. Constraints unchanged: free, fully local, no paid APIs, no cloud
+Status: 2026-09-20 (updated after the GPU slice). Constraints unchanged: free, fully local, no paid APIs, no cloud
 (ADR-0001). This page is the honest answer to "make me sound like someone else" and
 "give me an Irish accent", and what the app ships for it today.
 
@@ -10,8 +10,8 @@ Status: 2026-09-20. Constraints unchanged: free, fully local, no paid APIs, no c
 | --- | --- | --- | --- |
 | Shape *how you sound* (deeper, tiny, gravelly, ghostly, hollow, distant, breathy) | **Yes** | Any CPU | DSP Engine sliders, Tone Tags, **Presets**, **Design from Tone Hints** |
 | Describe a voice in words and get usable sliders | **Yes** (rules, not a model) | Any CPU | **Design from Tone Hints** — offline lexicon → tags + sliders |
-| Sound like a genuinely *different person* live | Only with a neural voice converter | **NVIDIA GPU, ≈ 6 GB VRAM**, 300–500 ms latency; CPU ≈ 1–2 s (unusable live) | **Not shipped.** Seam + GPU detection only (Settings → Neural) |
-| Describe a person in words and get *that person* | Only with a voice-design TTS feeding a converter | NVIDIA GPU, multi-GB download | **Not shipped.** Design falls back to the lexicon and says so |
+| Sound like a genuinely *different person* | Only with a neural voice converter | **NVIDIA GPU, ≈ 6 GB VRAM**, 300–500 ms latency; CPU ≈ 1–2 s (unusable live) | **`NeuralEngine` (X-VC) in Preview** once the opt-in pack is downloaded; Roleplay not yet wired; unverified on hardware |
+| Describe a person in words and get *that person* | Only with a voice-design TTS feeding a converter | NVIDIA GPU, multi-GB download | **Neural Voice design (Qwen3-TTS VoiceDesign)** when both packs are installed; lexicon fallback otherwise, and it says so |
 | Speak with an **Irish / British accent** in *your* live voice | **No** — see below | — | **Not faked.** Accent words are kept as notes only |
 | A designed character *reading text* in an accent (TTS, not your voice) | Plausible with a local TTS that takes accent prompts | GPU for good ones; small CPU TTS exists | Not shipped; would be a Preview/soundboard feature, not Roleplay |
 
@@ -50,26 +50,89 @@ anything.
 
 ## What shipped in this epic
 
-- **Presets** (`src/votr/assets/presets.json`, `votr.presets`): twelve named starting
-  points (Orc Warchief, Ancient Crone, Cave Troll, Pixie, Restless Ghost, Clockwork
-  Automaton, Court Herald, Shadow Whisperer, Elder Dragon, Kobold Scout, Lich, Through a
-  Helmet). Each is Tone Tags plus a slider recipe. "Use preset" in the editor loads a new
-  unsaved draft you Preview, tune and Save. Presets are copies, never links.
-- **Design from Tone Hints** (`votr.voicedesign.LexiconDesigner`): reads the free-text
-  Tone Hints and sets Tone Tags and sliders offline, instantly, on any CPU. Words pick
-  Macros (`gravelly`, `giant`, `ghostly`, …), other words nudge sliders (`deep`, `bright`,
-  `echoing`, `distant`, `breathy`, `angry`), intensifiers scale them (`very`, `slightly`),
-  and `-5 semitones` is taken literally. It reports what it heard. Accent words and
-  "sound like X" are recognised and answered with a note instead of a fake.
-- **Neural seam** (`votr.neural`): `detect_nvidia_gpu()` via `nvidia-smi`, a plain-language
-  status in **Settings → Neural**, `NEURAL_ENGINE_ID` reserved and *not* in the installed
-  Engine list (Voices for it stay disabled), and `NeuralDesigner` first in the designer
-  chain reporting exactly why it is unavailable. `design_voice()` falls back to the
-  lexicon. No download button exists yet.
+### CPU slice (PR #16, #17)
 
-## What would come next (only with a GPU on Michael's desk)
+- **Presets** (`votr.presets`): twelve named starting points; "Use preset" opens your
+  saved Voice for that preset or a fresh copy of the bundled recipe.
+- **Design from Tone Hints** (`votr.voicedesign.LexiconDesigner`): free text → Tone
+  Tags and sliders offline, instantly, on any CPU. Accent words and "sound like X" get a
+  note instead of a fake.
 
-S7.1 opt-in Engine pack download with checksum and resume → S7.3 Qwen3-TTS VoiceDesign
-reference clip from Tone Hints → S7.2 X-VC zero-shot `Engine` (`changes_identity=True`,
-`requires_gpu=True`) → S7.4 Library badges and latency warning. Details and licences in
-`docs/backlog.md` E7 and `docs/discovery-local-voice.md` §B.
+### GPU slice (this PR)
+
+- **`NeuralEngine`** (`votr.neural_engine`, `engine_id = "neural-v0"`): a real Engine
+  behind the ADR-0004 seam. It owns 48 kHz ↔ 16 kHz resampling, X-VC's streaming
+  geometry (2.4 s window = history | 240 ms current | 20 ms smooth | 100 ms future),
+  the crossfade, a dry/wet `mix` with a latency-matched dry path, and a `render` that
+  pushes the Take through the same `process_block` path so Preview equals live
+  (ADR-0005). `latency_frames()` reports ≈ 360 ms + resampler delay. Capabilities:
+  `changes_identity=True`, `requires_gpu=True`. The model sits behind a five-line
+  `VoiceConverter` protocol; tests drive it with a fake.
+- **Model adapters** (`votr.neural_backends`): `XvcConverter` calls X-VC's own
+  `bins/infer_utils` (`load_xvc`, `precompute_conditions`, `run_stream_chunk_forward`)
+  from the downloaded source checkout, rewriting its yaml to point at the downloaded
+  tokenizer and speaker encoder. `QwenVoiceDesign` calls
+  `qwen_tts.Qwen3TTSModel.generate_voice_design`. **Neither has run on real hardware
+  in this project yet** — see blockers.
+- **Opt-in model packs** (`votr.neural_pack`, Settings → Neural): two packs with every
+  file's publisher URL, size, licence and (where published) SHA-256. Download resumes
+  from `.part` files, verifies checksums, unzips the source archive, can be cancelled,
+  and never starts until the GM ticks the licence acknowledgement. Buttons are disabled
+  without an NVIDIA GPU of ≥ 6 GiB. Nothing is bundled or redistributed.
+- **Gate** (`votr.neural`): `probe_runtime` = GPU (nvidia-smi) + CUDA PyTorch importable
+  + pack installed. `Session.engine_installed("neural-v0")` is true only when all three
+  hold; Neural Voices in the Library stay disabled otherwise; `preview_engine()` routes a
+  Neural draft to the Neural Engine and falls back to DSP if it fails to start.
+- **Neural Voice design**: when both packs and the runtime are present, "Design from
+  Tone Hints" speaks a reference clip with Qwen3-TTS VoiceDesign, saves it under
+  `neural/clips/`, and the draft becomes a Neural Voice pointing at it. If the neural
+  designer is off *or blows up*, the lexicon designer answers and says why.
+
+## Model packs and licences (read before downloading)
+
+| Pack | Files | Size | Licence |
+| --- | --- | --- | --- |
+| X-VC conversion | X-VC source at commit `49df8c5` (GitHub zip) | small | MIT |
+| | `xvc.pt` (chenxie95/X-VC) | 5.0 GB | MIT |
+| | GLM-4-Voice tokenizer (`zai-org/glm-4-voice-tokenizer`) | 1.46 GB | **custom glm-4-voice licence** — free for personal and research use; commercial use requires registration with Zhipu AI; products must show "Built with glm-4"; governed by PRC law. Not OSI. X-VC does not run without it. |
+| | ERes2Net speaker encoder (ModelScope `iic/speech_eres2net_sv_en_voxceleb_16k`) | 27 MB | Apache-2.0 |
+| Qwen3-TTS VoiceDesign | `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign` | 4.5 GB | Apache-2.0 |
+
+For a GM using the app at their own table the GLM-4-Voice terms are met by the licence
+copy the pack downloads and the notice shown in Settings → Neural. Anyone selling a
+service on top of it would have to register with Zhipu. If that is unacceptable, the
+alternative zero-shot converter is Seed-VC (GPL-3.0, archived), which would need its
+own adapter.
+
+## What a GM can do
+
+| | No NVIDIA GPU (most laptops) | NVIDIA GPU ≥ 6 GiB, packs installed |
+| --- | --- | --- |
+| Sliders, Tone Tags, Presets, Preview, Roleplay | Yes | Yes |
+| Design from Tone Hints | Lexicon → tags + sliders | Qwen3-TTS reference clip → Neural Voice (falls back to lexicon if the model fails) |
+| Sound like a different person | No | Neural Engine, ≈ 360 ms + device latency in Preview |
+| Neural Voice in Roleplay Mode | No | **Not wired yet** — Roleplay still runs the DSP Engine (out of scope for this slice) |
+| Live Irish/British accent on your own speech | No | No — and we will not pretend |
+| Settings → Neural | Honest status, buttons disabled | Size + licences + download/cancel/resume |
+
+## Remaining blockers for Michael's box
+
+1. **Python runtime with CUDA PyTorch.** The packs are weights; the code needs
+   `torch==2.5.1` (CUDA build from the PyTorch index) plus X-VC's inference deps
+   (`hydra-core`, `omegaconf`, `einops`, `x-transformers`, `transformers==4.44.1`,
+   `librosa`, `soundfile`, `soxr`, `torchaudio`, `einx`, `descript-audiotools`) and,
+   for voice design, `qwen-tts`. None of this is in the installer; run from source:
+   `pip install -e ".[dev]"` then the neural packages by hand. `qwen-tts` may need a
+   newer `transformers` than X-VC pins — expect to try one, then the other, or two
+   environments. Unverified.
+2. **First real run of the adapters.** `XvcConverter` and `QwenVoiceDesign` follow the
+   upstream sources but have never executed on a GPU here. Budget for small API fixes in
+   `votr/neural_backends.py` (and possibly the yaml keys the runtime config rewrites).
+3. **Windows friendliness of X-VC's stack.** Its `requirements.txt` includes
+   `deepspeed`, which is training-only and painful on Windows; inference should not
+   import it, but that is untested.
+4. **Roleplay Mode** still uses the DSP Engine for Neural Voices (deliberately not
+   touched). Wiring `RoleplayPath` to `Session.neural_engine` plus the latency warning
+   (S7.4) is the next slice.
+5. **Quality and latency numbers** are the publishers' (X-VC paper: ~240 ms model
+   latency; community client: 290–490 ms end-to-end). We have measured nothing.

@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QUrl
+import threading
+
+from PySide6.QtCore import Qt, QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -13,8 +15,10 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QGroupBox,
     QKeySequenceEdit,
     QLabel,
+    QProgressBar,
     QPushButton,
     QSlider,
     QTabWidget,
@@ -26,11 +30,51 @@ from votr import WINDOW_TITLE, __version__
 from votr.devices import find_cable_input, mic_devices
 from votr.latency import format_latency_report
 from votr.live import query_devices
-from votr.neural import detect_nvidia_gpu, neural_status
+from votr.neural import neural_status
+from votr.neural_pack import (
+    PACKS,
+    DownloadCancelled,
+    DownloadError,
+    DownloadProgress,
+    ModelPack,
+    download_pack,
+)
 from votr.paths import license_path, notices_path
 from votr.preview import speaker_devices
 from votr.session import Session
 from votr.store import default_data_dir
+
+
+class PackDownloadWorker(QThread):
+    """Runs one pack download off the UI thread; cancel via ``cancel``."""
+
+    progressed = Signal(object)
+    finished_ok = Signal(str)
+    failed = Signal(str)
+    cancelled = Signal(str)
+
+    def __init__(self, pack: ModelPack, root, parent=None) -> None:
+        super().__init__(parent)
+        self._pack = pack
+        self._root = root
+        self.cancel = threading.Event()
+
+    def run(self) -> None:  # noqa: D401 — QThread entry point
+        try:
+            download_pack(
+                self._pack,
+                self._root,
+                progress=self.progressed.emit,
+                cancel=self.cancel,
+            )
+        except DownloadCancelled:
+            self.cancelled.emit(self._pack.pack_id)
+        except DownloadError as exc:
+            self.failed.emit(str(exc))
+        except Exception as exc:  # pragma: no cover - defensive
+            self.failed.emit(f"{type(exc).__name__}: {exc}")
+        else:
+            self.finished_ok.emit(self._pack.pack_id)
 
 
 class SettingsDialog(QDialog):
@@ -130,15 +174,154 @@ class SettingsDialog(QDialog):
     def _neural_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        self.neural_report = QLabel(neural_status(detect_nvidia_gpu()))
+        runtime = self.session.neural
+        self.neural_report = QLabel(neural_status(runtime.gpu, runtime))
         self.neural_report.setWordWrap(True)
         self.neural_report.setObjectName("neural_report")
         self.neural_report.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
         layout.addWidget(self.neural_report)
+
+        self.licence_ack = QCheckBox(
+            "I have read the licences below and want to download model packs "
+            "into my data folder (NVIDIA only; nothing is sent anywhere)."
+        )
+        self.licence_ack.setObjectName("licence_ack")
+        self.licence_ack.toggled.connect(self._refresh_pack_buttons)
+        layout.addWidget(self.licence_ack)
+
+        self.pack_buttons: dict[str, QPushButton] = {}
+        self.pack_labels: dict[str, QLabel] = {}
+        for pack in PACKS:
+            box = QGroupBox(f"{pack.title} — {pack.total_label}")
+            box_layout = QVBoxLayout(box)
+            summary = QLabel(pack.summary)
+            summary.setWordWrap(True)
+            box_layout.addWidget(summary)
+            licences = QLabel(
+                "Licences:\n• "
+                + "\n• ".join(pack.licences)
+                + ("\nNotes:\n• " + "\n• ".join(pack.caveats) if pack.caveats else "")
+            )
+            licences.setWordWrap(True)
+            licences.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            box_layout.addWidget(licences)
+            state = QLabel()
+            state.setObjectName(f"pack_state_{pack.pack_id}")
+            box_layout.addWidget(state)
+            button = QPushButton()
+            button.setObjectName(f"pack_button_{pack.pack_id}")
+            button.clicked.connect(
+                lambda _=False, pid=pack.pack_id: self._download(pid)
+            )
+            box_layout.addWidget(button)
+            self.pack_buttons[pack.pack_id] = button
+            self.pack_labels[pack.pack_id] = state
+            layout.addWidget(box)
+
+        self.pack_progress = QProgressBar()
+        self.pack_progress.setRange(0, 1000)
+        self.pack_progress.setVisible(False)
+        layout.addWidget(self.pack_progress)
+        self.pack_cancel = QPushButton("Cancel download")
+        self.pack_cancel.setVisible(False)
+        self.pack_cancel.clicked.connect(self._cancel_download)
+        layout.addWidget(self.pack_cancel)
+        self._worker: PackDownloadWorker | None = None
+        self._refresh_pack_buttons()
         layout.addStretch()
         return page
+
+    def _pack_state(self, pack: ModelPack) -> str:
+        runtime = self.session.neural
+        status = runtime.conversion if pack.pack_id == "xvc" else runtime.design
+        if status.installed:
+            return "Installed."
+        if status.present:
+            return (
+                f"Partly downloaded ({status.bytes_present / 1024**3:.1f} GB present); "
+                "Download resumes."
+            )
+        return "Not downloaded."
+
+    def _refresh_pack_buttons(self) -> None:
+        runtime = self.session.neural
+        busy = self._worker is not None and self._worker.isRunning()
+        for pack in PACKS:
+            status = runtime.conversion if pack.pack_id == "xvc" else runtime.design
+            button = self.pack_buttons[pack.pack_id]
+            self.pack_labels[pack.pack_id].setText(self._pack_state(pack))
+            if status.installed:
+                button.setText("Installed")
+                button.setEnabled(False)
+                continue
+            button.setText(f"Download {pack.total_label}")
+            allowed = runtime.gpu_ok and self.licence_ack.isChecked() and not busy
+            button.setEnabled(allowed)
+            if not runtime.gpu_ok:
+                button.setToolTip(
+                    "Needs an NVIDIA GPU with enough memory; not offered here."
+                )
+            elif not self.licence_ack.isChecked():
+                button.setToolTip("Tick the licence acknowledgement first.")
+            else:
+                button.setToolTip("")
+
+    def _download(self, pack_id: str) -> None:
+        pack = next((item for item in PACKS if item.pack_id == pack_id), None)
+        if pack is None or (self._worker is not None and self._worker.isRunning()):
+            return
+        if not (self.session.neural.gpu_ok and self.licence_ack.isChecked()):
+            return
+        self._worker = PackDownloadWorker(pack, self.session.neural.root, self)
+        self._worker.progressed.connect(self._on_progress)
+        self._worker.finished_ok.connect(self._on_download_done)
+        self._worker.failed.connect(self._on_download_failed)
+        self._worker.cancelled.connect(self._on_download_cancelled)
+        self.pack_progress.setValue(0)
+        self.pack_progress.setVisible(True)
+        self.pack_cancel.setVisible(True)
+        self._refresh_pack_buttons()
+        self._worker.start()
+
+    def _on_progress(self, progress: DownloadProgress) -> None:
+        if progress.bytes_total:
+            self.pack_progress.setValue(
+                int(1000 * min(1.0, progress.bytes_done / progress.bytes_total))
+            )
+        self.pack_progress.setFormat(
+            f"{progress.file_relpath} "
+            f"({progress.file_index + 1}/{progress.file_count}) "
+            f"{progress.bytes_done / 1024**2:.0f} MB"
+        )
+
+    def _finish_download(self, message: str) -> None:
+        self.pack_progress.setVisible(False)
+        self.pack_cancel.setVisible(False)
+        self.session.refresh_neural()
+        runtime = self.session.neural
+        self.neural_report.setText(
+            neural_status(runtime.gpu, runtime) + f"\n\n{message}"
+        )
+        self._refresh_pack_buttons()
+
+    def _on_download_done(self, pack_id: str) -> None:
+        self._finish_download(f"Download finished: {pack_id}.")
+
+    def _on_download_failed(self, message: str) -> None:
+        self._finish_download(f"Download failed: {message}")
+
+    def _on_download_cancelled(self, pack_id: str) -> None:
+        self._finish_download(
+            f"Download cancelled: {pack_id}. Partial files kept; resume any time."
+        )
+
+    def _cancel_download(self) -> None:
+        if self._worker is not None:
+            self._worker.cancel.set()
 
     def _about_tab(self) -> QWidget:
         page = QWidget()

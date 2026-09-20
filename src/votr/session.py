@@ -18,6 +18,13 @@ from votr.latency import (
 from votr.latency import run_latency_test as probe_latency
 from votr.live import AudioDeviceError
 from votr.macros import load_macros
+from votr.neural import (
+    NEURAL_ENGINE_ID,
+    NeuralRuntime,
+    create_neural_engine,
+    probe_runtime,
+)
+from votr.neural_engine import NeuralEngine
 from votr.presets import load_presets, preset_by_name, voice_from_preset
 from votr.roleplay import RoleplayError, RoleplayPath
 from votr.store import VoiceStore
@@ -36,6 +43,9 @@ class Session:
         block = self.settings.block_size or None
         self.engine = DspEngine(macros=self.macros, block_size=block)
         self.path = RoleplayPath(self.engine, self.settings)
+        self.neural: NeuralRuntime = probe_runtime(self.store.root.parent)
+        self.neural_engine: NeuralEngine | None = None
+        self.neural_error = ""
         self.voices = self.store.load_all()
         self.warnings = list(self.store.warnings)
         self.draft = Voice.new()
@@ -49,7 +59,35 @@ class Session:
         return self.draft.to_dict() != self._saved
 
     def engine_installed(self, engine_id: str) -> bool:
+        if engine_id == NEURAL_ENGINE_ID:
+            return self.neural.ready
         return engine_id in INSTALLED_ENGINE_IDS
+
+    def refresh_neural(self) -> None:
+        """Re-probe after a pack download; drops a stale Engine instance."""
+        self.neural = probe_runtime(self.store.root.parent, gpu=self.neural.gpu)
+        if not self.neural.ready:
+            self.neural_engine = None
+
+    def ensure_neural_engine(self) -> NeuralEngine | None:
+        """Load the Neural Engine on first use (it is a multi-GB model)."""
+        if self.neural_engine is None and self.neural.ready and not self.neural_error:
+            engine = create_neural_engine(
+                self.neural, block_size=self.engine.block_size
+            )
+            if engine is None:
+                self.neural_error = "Neural Engine failed to start; see the log."
+            self.neural_engine = engine
+        return self.neural_engine
+
+    def preview_engine(self):
+        """Engine Preview should render the draft with (Neural Voice → Neural)."""
+        if self.draft.engine_id == NEURAL_ENGINE_ID:
+            engine = self.ensure_neural_engine()
+            if engine is not None:
+                engine.set_params(self.draft.params)
+                return engine
+        return self.engine
 
     def voice_by_id(self, voice_id: str) -> Voice | None:
         return next((voice for voice in self.voices if voice.id == voice_id), None)
@@ -162,10 +200,11 @@ class Session:
     def design_from_hints(self, prompt: str | None = None) -> VoiceDesign:
         """Prompt → Voice: fill the draft's tags and sliders from its Tone Hints."""
         text = prompt if prompt is not None else self.draft.tone_hints
-        design = design_voice(text, self.macros)
+        design = design_voice(text, self.macros, self.neural)
         self.draft.tone_hints = text
         self.draft.tone_tags = list(design.tone_tags)
         self.draft.params = dict(design.params)
+        self.draft.engine_id = design.engine_id
         if not self.draft.name.strip() or self.draft.name == "New Voice":
             self.draft.name = design.name
         self.apply_draft_to_engine()

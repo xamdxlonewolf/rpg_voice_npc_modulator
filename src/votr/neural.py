@@ -1,25 +1,52 @@
 # Copyright (C) 2026 Michael Cobb
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Neural Engine seam (E7): GPU detection and honest availability.
+"""Neural Engine gate (E7): GPU detection, runtime probe, honest availability.
 
-Nothing here downloads or runs a model. It answers two questions the UI needs:
-does this machine have an NVIDIA GPU with enough memory, and what exactly is
-missing before a neural Voice designer or Engine could run. The DSP Engine is
-always the fallback. See docs/neural-voice.md for what is and is not feasible.
+Three things must all be true before anything neural runs: an NVIDIA GPU with
+enough memory, a CUDA build of PyTorch importable in this Python, and the model
+pack downloaded (Settings → Neural, opt-in). Otherwise everything here reports
+*why not* and the DSP Engine plus the lexicon designer remain the path.
 """
 
 from __future__ import annotations
 
+import importlib.util
+import logging
 import shutil
 import subprocess
+import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
+from votr.neural_engine import NEURAL_ENGINE_ID, REFERENCE_CLIP_KEY, NeuralEngine
+from votr.neural_pack import (
+    CONVERSION_PACK,
+    VOICE_DESIGN_PACK,
+    PackStatus,
+    pack_root,
+    pack_status,
+)
 from votr.voicedesign import VoiceDesign
 
-NEURAL_ENGINE_ID = "neural-v0"
+__all__ = [
+    "NEURAL_ENGINE_ID",
+    "GpuInfo",
+    "NeuralDesigner",
+    "NeuralRuntime",
+    "create_neural_engine",
+    "detect_nvidia_gpu",
+    "neural_status",
+    "parse_nvidia_smi",
+    "probe_runtime",
+]
+
+log = logging.getLogger("votr.neural")
+
 MIN_VRAM_MIB = 6 * 1024
-DOWNLOAD_ESTIMATE = "roughly 5–8 GB (CUDA PyTorch plus model weights)"
+DOWNLOAD_ESTIMATE = "about 6.5 GB for conversion, 4.5 GB more for voice design"
 
 
 @dataclass(frozen=True)
@@ -65,7 +92,120 @@ def detect_nvidia_gpu(timeout_s: float = 3.0) -> GpuInfo | None:
     return parse_nvidia_smi(result.stdout)
 
 
-def neural_status(gpu: GpuInfo | None) -> str:
+def torch_cuda_state() -> tuple[bool, bool, str]:
+    """(torch importable, CUDA usable, detail). Never imports torch if absent."""
+    if importlib.util.find_spec("torch") is None:
+        return False, False, "PyTorch is not installed in this Python"
+    try:
+        import torch  # type: ignore[import-not-found]
+    except Exception as exc:  # pragma: no cover - broken install
+        return False, False, f"PyTorch failed to import: {exc}"
+    try:
+        cuda = bool(torch.cuda.is_available())
+    except Exception as exc:  # pragma: no cover
+        return True, False, f"torch.cuda check failed: {exc}"
+    version = getattr(torch, "__version__", "?")
+    if not cuda:
+        return (
+            True,
+            False,
+            f"PyTorch {version} is installed without a usable CUDA device",
+        )
+    return True, True, f"PyTorch {version} with CUDA"
+
+
+@dataclass(frozen=True)
+class NeuralRuntime:
+    gpu: GpuInfo | None
+    torch_ok: bool
+    cuda_ok: bool
+    torch_detail: str
+    conversion: PackStatus
+    design: PackStatus
+    root: Path
+
+    @property
+    def gpu_ok(self) -> bool:
+        return self.gpu is not None and self.gpu.enough_vram
+
+    @property
+    def ready(self) -> bool:
+        return self.gpu_ok and self.cuda_ok and self.conversion.installed
+
+    @property
+    def design_ready(self) -> bool:
+        return self.ready and self.design.installed
+
+    @property
+    def reason(self) -> str:
+        if self.gpu is None:
+            return "no NVIDIA GPU detected"
+        if not self.gpu.enough_vram:
+            return f"{self.gpu.name} has {self.gpu.vram_mib} MiB; needs {MIN_VRAM_MIB}"
+        if not self.cuda_ok:
+            return self.torch_detail
+        if not self.conversion.installed:
+            return "the X-VC model pack is not downloaded"
+        return ""
+
+
+def probe_runtime(
+    data_dir: Path,
+    *,
+    gpu: GpuInfo | None = None,
+    detect: Callable[[], GpuInfo | None] = detect_nvidia_gpu,
+    torch_state: Callable[[], tuple[bool, bool, str]] = torch_cuda_state,
+) -> NeuralRuntime:
+    root = pack_root(Path(data_dir))
+    found = gpu if gpu is not None else detect()
+    torch_ok, cuda_ok, detail = (
+        torch_state()
+        if found is not None
+        else (
+            False,
+            False,
+            "not checked (no NVIDIA GPU)",
+        )
+    )
+    return NeuralRuntime(
+        gpu=found,
+        torch_ok=torch_ok,
+        cuda_ok=cuda_ok,
+        torch_detail=detail,
+        conversion=pack_status(CONVERSION_PACK, root),
+        design=pack_status(VOICE_DESIGN_PACK, root),
+        root=root,
+    )
+
+
+ConverterFactory = Callable[[Path], Any]
+
+
+def _default_converter(root: Path) -> Any:
+    from votr.neural_backends import XvcConverter
+
+    return XvcConverter(root)
+
+
+def create_neural_engine(
+    runtime: NeuralRuntime,
+    *,
+    block_size: int = 512,
+    converter_factory: ConverterFactory = _default_converter,
+) -> NeuralEngine | None:
+    """Build the Neural Engine, or None (with a log line) when it cannot run."""
+    if not runtime.ready:
+        log.info("Neural Engine unavailable: %s", runtime.reason)
+        return None
+    try:
+        converter = converter_factory(runtime.root)
+        return NeuralEngine(converter, block_size=block_size)
+    except Exception as exc:
+        log.warning("Neural Engine failed to start: %s", exc)
+        return None
+
+
+def neural_status(gpu: GpuInfo | None, runtime: NeuralRuntime | None = None) -> str:
     """Plain-language state of the Neural Engine on this machine."""
     if gpu is None:
         hardware = (
@@ -79,40 +219,102 @@ def neural_status(gpu: GpuInfo | None) -> str:
         )
     else:
         hardware = (
-            f"{gpu.name} with {gpu.vram_mib} MiB found — enough for the planned "
-            "Neural Engine once it is installed."
+            f"{gpu.name} with {gpu.vram_mib} MiB found — enough for the Neural "
+            "Engine once its model pack is downloaded."
+        )
+    if runtime is None:
+        install = (
+            "Not installed: the model packs are an opt-in download "
+            f"({DOWNLOAD_ESTIMATE}) into your data folder, NVIDIA only. There is no "
+            "silent download; you see size and licences first and can cancel."
+        )
+    else:
+        conv = "installed" if runtime.conversion.installed else "not downloaded"
+        design = "installed" if runtime.design.installed else "not downloaded"
+        install = (
+            f"Model packs: X-VC conversion {conv}; Qwen3-TTS VoiceDesign {design}. "
+            f"PyTorch: {runtime.torch_detail}. "
+            + (
+                "Neural Engine is ready."
+                if runtime.ready
+                else f"Neural Engine is off — {runtime.reason}."
+            )
         )
     return (
-        f"{hardware}\n\n"
-        "Not in this build: the Neural Engine and Neural Voice Design are not "
-        f"installed and there is no download button yet. Installing means an opt-in "
-        f"download of {DOWNLOAD_ESTIMATE} into your data folder, NVIDIA only.\n\n"
-        "What it would add: sounding like a different person from a short reference "
-        "clip, and describing a voice in words to get that person. What it would "
-        "not add: changing your accent live. Voice conversion moves timbre, not "
-        "pronunciation — an Irish or British accent still has to come from you."
+        f"{hardware}\n\n{install}\n\n"
+        "What it adds: sounding like a different person from a short reference "
+        "clip, and (with the VoiceDesign pack) describing a voice in words to get "
+        "that person. What it does not add: changing your accent live. Voice "
+        "conversion moves timbre, not pronunciation — an Irish or British accent "
+        "still has to come from you."
     )
 
 
 class NeuralDesigner:
-    """Prompt → reference clip → Voice. Placeholder: reports why it is off."""
+    """Prompt → spoken reference clip → Neural Voice (when the packs are here)."""
 
     designer_id = "neural"
 
-    def __init__(self, gpu: GpuInfo | None = None, *, installed: bool = False) -> None:
-        self._gpu = gpu
-        self._installed = installed
+    def __init__(
+        self,
+        runtime: NeuralRuntime | None = None,
+        *,
+        clip_maker_factory: Callable[[Path], Any] | None = None,
+    ) -> None:
+        self._runtime = runtime
+        self._factory = clip_maker_factory
+        self._maker: Any = None
 
     def available(self) -> tuple[bool, str]:
-        if not self._installed:
+        if self._runtime is None:
             return False, (
-                "Neural Voice Design is not installed in this build (needs an NVIDIA "
-                f"GPU with ≥ {MIN_VRAM_MIB} MiB and an opt-in download of "
-                f"{DOWNLOAD_ESTIMATE})."
+                "Neural Voice Design is not installed (needs an NVIDIA GPU with ≥ "
+                f"{MIN_VRAM_MIB} MiB and the opt-in model packs, {DOWNLOAD_ESTIMATE})."
             )
-        if self._gpu is None or not self._gpu.enough_vram:
-            return False, "Neural Voice Design needs an NVIDIA GPU with enough memory."
-        return False, "Neural Voice Design has no model wired in yet."
+        if not self._runtime.ready:
+            return False, f"Neural Voice Design is off — {self._runtime.reason}."
+        if not self._runtime.design.installed:
+            return (
+                False,
+                "Neural Voice Design is off — the VoiceDesign pack is not downloaded.",
+            )
+        return True, ""
+
+    def _clip_maker(self) -> Any:
+        if self._maker is None:
+            assert self._runtime is not None
+            factory = self._factory or _default_clip_maker
+            self._maker = factory(self._runtime.root)
+        return self._maker
 
     def design(self, prompt: str) -> VoiceDesign:
-        raise RuntimeError(self.available()[1])
+        ok, reason = self.available()
+        if not ok:
+            raise RuntimeError(reason)
+        assert self._runtime is not None
+        from votr.voicedesign import _guess_name
+        from votr.wavutil import write_wav
+
+        audio, rate = self._clip_maker().make_clip(prompt.strip())
+        clips = self._runtime.root / "clips"
+        clips.mkdir(parents=True, exist_ok=True)
+        path = clips / f"{uuid.uuid4()}.wav"
+        write_wav(path, audio, int(rate))
+        return VoiceDesign(
+            name=_guess_name(prompt),
+            tone_tags=[],
+            params={REFERENCE_CLIP_KEY: str(path), "mix": 1.0},
+            matched=[prompt.strip()],
+            notes=[
+                "Reference clip spoken by Qwen3-TTS VoiceDesign from your words; the "
+                "Neural Engine converts your voice toward it. Accent is still yours."
+            ],
+            designer=self.designer_id,
+            engine_id=NEURAL_ENGINE_ID,
+        )
+
+
+def _default_clip_maker(root: Path) -> Any:
+    from votr.neural_backends import QwenVoiceDesign
+
+    return QwenVoiceDesign(root)

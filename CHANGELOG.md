@@ -5,6 +5,13 @@ Windows installer artifacts are attached to GitHub Releases on `v*` tags.
 
 ## Unreleased
 
+- E7 GPU slice: a real `NeuralEngine` (X-VC zero-shot voice conversion) behind the
+  Engine seam with streaming windows, latency-matched mix and Preview == live;
+  opt-in model pack download in Settings → Neural (sizes, licences incl. the
+  GLM-4-Voice caveat, resume, checksum, cancel; NVIDIA ≥ 6 GiB only); neural Voice
+  design from Tone Hints via Qwen3-TTS VoiceDesign when installed, lexicon
+  fallback otherwise. Nothing bundled; unverified on real hardware so far.
+
 - Presets: a Voice saved from a preset now remembers it (`preset` field), so
   choosing that preset again opens your saved Voice instead of a new bundled
   copy; "Fresh copy" starts over from the bundled recipe under a new name.
