@@ -52,6 +52,9 @@ class VoiceConverter(Protocol):
         """Convert one model-rate window; returns the same number of samples."""
 
 
+_PEAK_CEILING = 0.97
+
+
 @dataclass(frozen=True)
 class StreamWindow:
     """X-VC streaming geometry in milliseconds (see bins/infer_utils.py)."""
@@ -303,13 +306,21 @@ class NeuralEngine(BaseEngine):
         if not self._has_reference or float(self._params["mix"]) <= 0.0:
             return samples.copy()
         latency = self.latency_frames()
+        # Condition the whole Take the way the model expects (X-VC's
+        # volume_normalize), then restore the GM's level afterwards.
+        normalize = getattr(self._converter, "normalize", None)
+        source = normalize(samples) if callable(normalize) else samples
         padded = np.concatenate(
-            [samples, np.zeros(latency + self.block_size, dtype=np.float32)]
+            [source, np.zeros(latency + self.block_size, dtype=np.float32)]
         )
         out = super().render(padded)
         out = out[latency : latency + samples.size]
         dry_level = active_rms(samples, self.sample_rate)
         wet_level = active_rms(out, self.sample_rate)
         if dry_level > 1e-6 and wet_level > 1e-6:
-            out = out * min(4.0, max(0.25, dry_level / wet_level))
-        return np.clip(out, -1.0, 1.0).astype(np.float32)
+            out = out * min(8.0, max(0.125, dry_level / wet_level))
+        # Never hard-clip: bring the peak under the ceiling instead of cracking.
+        peak = float(np.max(np.abs(out))) if out.size else 0.0
+        if peak > _PEAK_CEILING:
+            out = out * (_PEAK_CEILING / peak)
+        return out.astype(np.float32)

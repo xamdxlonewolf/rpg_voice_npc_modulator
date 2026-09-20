@@ -27,6 +27,8 @@ log = logging.getLogger("votr.clips")
 CLIP_SAMPLE_RATE = 48_000
 MAX_CLIP_SECONDS = 30.0
 MIN_CLIP_SECONDS = 1.0
+CLIP_TARGET_PEAK = 0.9
+QUIET_PEAK_DB = -24.0
 IMPORT_EXTENSIONS = (".wav", ".flac", ".mp3", ".ogg", ".aiff", ".aif", ".m4a")
 REFERENCE_CLIP_ID_KEY = "reference_clip_id"
 
@@ -42,10 +44,25 @@ class Clip:
     seconds: float
     origin: str = ""
     created: str = ""
+    source_peak_db: float = 0.0
 
     @property
     def label(self) -> str:
         return f"{self.name} ({self.seconds:.1f} s)"
+
+    @property
+    def was_quiet(self) -> bool:
+        return self.source_peak_db < QUIET_PEAK_DB
+
+    @property
+    def level_note(self) -> str:
+        note = f"recorded peak {self.source_peak_db:.0f} dBFS"
+        if self.was_quiet:
+            note += (
+                " — quiet; it was boosted, but get closer to the mic for a "
+                "cleaner mimic"
+            )
+        return note
 
 
 def _now() -> str:
@@ -116,6 +133,7 @@ class ClipLibrary:
                     seconds=float(data.get("seconds") or 0.0),
                     origin=str(data.get("origin") or ""),
                     created=str(data.get("created") or ""),
+                    source_peak_db=float(data.get("source_peak_db") or 0.0),
                 )
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 log.warning("Skipped clip metadata %s: %s", meta.name, exc)
@@ -161,14 +179,18 @@ class ClipLibrary:
                 f"{MIN_CLIP_SECONDS:.0f} s (5–10 s of clear speech is ideal)."
             )
         peak = float(np.max(np.abs(audio)))
-        if peak > 0.99:
-            audio = audio / peak * 0.99
+        source_peak_db = 20.0 * np.log10(max(peak, 1e-6))
+        # Store at a healthy, consistent level: audible on playback and the
+        # Engine's own normalisation has less to do.
+        if peak > 1e-6:
+            audio = audio / peak * CLIP_TARGET_PEAK
         clip = Clip(
             id=str(uuid4()),
             name=self.unique_name(name.strip() or "Mimic clip"),
             seconds=round(seconds, 2),
             origin=origin,
             created=_now(),
+            source_peak_db=round(float(source_peak_db), 1),
         )
         write_wav(self.path_for(clip.id), audio, CLIP_SAMPLE_RATE)
         self._write_meta(clip)

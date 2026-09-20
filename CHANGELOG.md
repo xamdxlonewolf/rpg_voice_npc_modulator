@@ -5,6 +5,12 @@ Windows installer artifacts are attached to GitHub Releases on `v*` tags.
 
 ## Unreleased
 
+- Neural: Takes and mimic clips are conditioned the way X-VC expects
+  (its `volume_normalize` + 40 Hz high-pass) before conversion, and the output
+  is peak-guarded instead of hard-clipped — fixes crackly, too-soft mimics from
+  quiet recordings. Mimic clip panel gains Play/Stop and a recorded-level note;
+  stored clips are normalised to −1 dBFS peak.
+
 - Mimic clip library for Neural Voices: Engine dropdown in the editor (DSP ↔
   Neural), record up to 30 s with a countdown, upload WAV/FLAC/MP3/OGG/AIFF,
   pick/rename/delete clips, Voices store the clip id. No more hand-editing JSON.

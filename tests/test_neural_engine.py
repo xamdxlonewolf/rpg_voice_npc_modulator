@@ -149,3 +149,53 @@ def test_without_reference_the_engine_passes_audio_through(tmp_path: Path) -> No
         engine.process_block(take[:10])
     engine.set_params({REFERENCE_CLIP_KEY: ""})
     assert engine.params()[REFERENCE_CLIP_KEY] == ""
+
+
+def test_xvc_volume_normalize_matches_upstream_behaviour() -> None:
+    from votr.neural_backends import xvc_volume_normalize
+
+    t = np.arange(16_000) / 16_000.0
+    quiet = (0.02 * np.sin(2 * np.pi * 200 * t)).astype(np.float32)
+    normalised = xvc_volume_normalize(quiet)
+    loud_part = np.sort(np.abs(normalised))
+    loud_part = loud_part[loud_part > 0.01]
+    top = float(
+        np.mean(loud_part[int(0.9 * loud_part.size) : int(0.99 * loud_part.size)])
+    )
+    assert top == pytest.approx(0.2, rel=0.05)
+    hot = (0.95 * np.sin(2 * np.pi * 200 * t)).astype(np.float32)
+    assert float(np.max(np.abs(xvc_volume_normalize(hot)))) <= 1.0
+    assert xvc_volume_normalize(np.zeros(0, np.float32)).size == 0
+    assert float(np.max(np.abs(xvc_volume_normalize(np.zeros(100, np.float32))))) == 0.0
+
+
+def test_render_conditions_input_and_never_hard_clips(tmp_path: Path) -> None:
+    class LoudQuietConverter(RecordingConverter):
+        """Returns spikes 3x the input: would clip if we only scaled by RMS."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.seen_peaks: list[float] = []
+
+        @staticmethod
+        def normalize(samples: np.ndarray) -> np.ndarray:
+            return samples / max(float(np.max(np.abs(samples))), 1e-6) * 0.5
+
+        def convert_window(self, window: np.ndarray) -> np.ndarray:
+            self.seen_peaks.append(float(np.max(np.abs(window))))
+            out = window.copy()
+            out[::4000] = 3.0 * np.sign(out[::4000] + 1e-9)
+            return out
+
+    converter = LoudQuietConverter()
+    engine = NeuralEngine(converter)
+    clip = tmp_path / "ref.wav"
+    write_wav(clip, _speech(0.5), RATE)
+    engine.set_params({REFERENCE_CLIP_KEY: str(clip)})
+    quiet_take = _speech(1.0) * 0.05
+    out = engine.render(quiet_take)
+    # Converter saw the conditioned (normalised) signal, not the raw 0.05 peak.
+    assert max(converter.seen_peaks) > 0.3
+    # Spikes are tamed by peak scaling, not chopped flat at ±1.
+    assert float(np.max(np.abs(out))) <= 0.97 + 1e-6
+    assert not np.any(np.abs(out) == 1.0)

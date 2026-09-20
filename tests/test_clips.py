@@ -189,3 +189,20 @@ def test_read_wav_of_saved_clip_matches_added_audio(tmp_path: Path) -> None:
     samples, _ = read_wav(library.path_for(clip.id))
     n = min(samples.size, audio.size)
     assert float(np.corrcoef(samples[:n], audio[:n])[0, 1]) > 0.999
+
+
+def test_clips_are_stored_at_a_healthy_level_and_remember_source_peak(
+    tmp_path: Path,
+) -> None:
+    library = ClipLibrary(tmp_path)
+    quiet = library.add(_speech(3.0) * 0.02, CLIP_SAMPLE_RATE, "quiet mic")
+    assert quiet.source_peak_db == pytest.approx(-44.4, abs=0.5)
+    assert quiet.was_quiet and "boosted" in quiet.level_note
+    samples, _ = library.load(quiet.id)
+    assert float(np.max(np.abs(samples))) == pytest.approx(0.9, abs=0.01)
+    hot = library.add(_speech(3.0) * 3.0, CLIP_SAMPLE_RATE, "hot")
+    assert not hot.was_quiet
+    assert float(np.max(np.abs(library.load(hot.id)[0]))) == pytest.approx(
+        0.9, abs=0.01
+    )
+    assert ClipLibrary(tmp_path).get(quiet.id).source_peak_db == quiet.source_peak_db

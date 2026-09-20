@@ -231,6 +231,22 @@ def test_editor_neural_voice_picks_uploads_and_records_clips(
     assert ogre is not None
     assert session.draft.params[REFERENCE_CLIP_ID_KEY] == ogre.id
     assert "ogre" in editor.mimic.status.text()
+    assert "dBFS" in editor.mimic.status.text() and "Play" in editor.mimic.status.text()
+
+    # Play the selected clip through the speakers (stubbed here).
+    played: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        clips_panel,
+        "play_on_speakers",
+        lambda samples, sample_rate=48000: (
+            played.append((samples.size, sample_rate)) or True
+        ),
+    )
+    assert editor.mimic.play_button.isEnabled()
+    assert editor.mimic.play_selected()
+    assert (
+        played and played[0][1] == CLIP_SAMPLE_RATE and played[0][0] > CLIP_SAMPLE_RATE
+    )
 
     # Record: fake the microphone, feed 3 s, stop with a name; capped label shows 30 s.
     class FakeStream:
