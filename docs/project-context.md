@@ -93,7 +93,6 @@ Other settled points (grill round 1, `docs/grill-round-1.md`):
 | `docs/adr/` | Architecture decision records 0001–0006. |
 | `docs/backlog.md` | Rough-draft backlog: epics → stories → tasks, plus the later Neural Engine epic. |
 | `docs/neural-voice.md` | E7: what is feasible free and local (CPU vs NVIDIA GPU), why live accent conversion is not, what shipped. |
-| `docs/neural-voice.md` | E7: what is feasible free and local (CPU vs NVIDIA GPU), why live accent conversion is not, what shipped. |
 
 ## Implementation tooling
 
