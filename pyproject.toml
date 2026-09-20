@@ -16,6 +16,7 @@ dependencies = [
     "sounddevice>=0.5",
     "python-stretch>=0.3",
     "pedalboard>=0.9",
+    "platformdirs>=4.0",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +39,9 @@ Repository = "https://github.com/xamdxlonewolf/rpg_voice_npc_modulator"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+votr = ["assets/*.json", "assets/*.wav"]
 
 [tool.ruff]
 line-length = 88

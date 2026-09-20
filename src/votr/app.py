@@ -1,14 +1,15 @@
 # Copyright (C) 2026 Michael Cobb
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-"""Empty Voice of the Realm window (S0.1 scaffold)."""
+"""Voice of the Realm application entry."""
 
 from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
-from votr import WINDOW_TITLE
+from votr.session import Session
 
 HEADLESS_ENV = "VOTR_HEADLESS"
 
@@ -23,14 +24,13 @@ def create_application(argv: list[str] | None = None):
     return QApplication(list(sys.argv if argv is None else argv))
 
 
-def create_main_window():
-    """Build the empty main window titled Voice of the Realm."""
-    from PySide6.QtWidgets import QMainWindow, QWidget
+def create_main_window(session: Session | None = None, data_dir: Path | None = None):
+    """Build the main window with the Voice editor."""
+    from votr.ui.main_window import MainWindow
 
-    window = QMainWindow()
-    window.setWindowTitle(WINDOW_TITLE)
-    window.setCentralWidget(QWidget())
-    return window
+    if session is None:
+        session = Session(data_dir)
+    return MainWindow(session)
 
 
 def is_headless(argv: list[str]) -> bool:
@@ -38,7 +38,7 @@ def is_headless(argv: list[str]) -> bool:
 
 
 def run(argv: list[str] | None = None) -> int:
-    """Show the empty window, or construct it and exit when headless."""
+    """Show the window, or construct it and exit when headless."""
     args = list(sys.argv[1:] if argv is None else argv)
     if is_headless(args):
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

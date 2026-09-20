@@ -1,0 +1,101 @@
+# Copyright (C) 2026 Michael Cobb
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+"""In-memory session: Voices, Active Voice, DSP Engine."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from votr.dsp import DspEngine
+from votr.macros import load_macros
+from votr.store import VoiceStore
+from votr.voice import DSP_ENGINE_ID, Voice
+
+INSTALLED_ENGINE_IDS = {DSP_ENGINE_ID, "passthrough"}
+
+
+class Session:
+    def __init__(self, data_dir: Path | None = None) -> None:
+        self.store = VoiceStore(data_dir)
+        self.macros = load_macros()
+        self.engine = DspEngine(macros=self.macros)
+        self.voices = self.store.load_all()
+        self.warnings = list(self.store.warnings)
+        self.draft = Voice.new()
+        self.active_id: str | None = None
+        self._saved = self.draft.to_dict()
+
+    def is_dirty(self) -> bool:
+        return self.draft.to_dict() != self._saved
+
+    def engine_installed(self, engine_id: str) -> bool:
+        return engine_id in INSTALLED_ENGINE_IDS
+
+    def voice_by_id(self, voice_id: str) -> Voice | None:
+        return next((voice for voice in self.voices if voice.id == voice_id), None)
+
+    def replace_voice(self, voice: Voice) -> None:
+        self.voices = [item for item in self.voices if item.id != voice.id]
+        self.voices.append(voice)
+
+    def apply_draft_to_engine(self) -> None:
+        self.engine.set_params(self.draft.params)
+
+    def apply_tag(self, tag: str) -> None:
+        if tag not in self.macros:
+            return
+        if tag not in self.draft.tone_tags:
+            self.draft.tone_tags.append(tag)
+        self.engine.apply_macro(tag)
+        self.draft.params.update(self.macros[tag].params)
+
+    def save_draft(self) -> Voice:
+        if not self.draft.name.strip():
+            self.draft.name = "Untitled Voice"
+        saved = Voice.from_dict(self.draft.to_dict())
+        self.store.save(saved)
+        self.replace_voice(saved)
+        self.draft = Voice.from_dict(saved.to_dict())
+        self._saved = self.draft.to_dict()
+        if self.active_id is None:
+            self.set_active(saved.id)
+        return saved
+
+    def save_draft_as_new(self) -> Voice:
+        self.draft = self.draft.duplicate()
+        return self.save_draft()
+
+    def delete_draft(self) -> None:
+        voice_id = self.draft.id
+        self.store.delete(voice_id)
+        self.voices = [voice for voice in self.voices if voice.id != voice_id]
+        if self.active_id == voice_id:
+            self.active_id = self.voices[0].id if self.voices else None
+        self.edit_new()
+
+    def edit(self, voice: Voice) -> None:
+        self.draft = Voice.from_dict(voice.to_dict())
+        self._saved = self.draft.to_dict()
+        self.apply_draft_to_engine()
+
+    def edit_new(self) -> None:
+        self.draft = Voice.new()
+        self._saved = self.draft.to_dict()
+        defaults = {spec.key: spec.default for spec in self.engine.parameter_schema()}
+        self.engine.set_params(defaults)
+
+    def set_active(self, voice_id: str) -> Voice | None:
+        voice = self.voice_by_id(voice_id)
+        if voice is None or not self.engine_installed(voice.engine_id):
+            return None
+        voice.touch(used=True)
+        self.store.save(voice)
+        self.active_id = voice.id
+        self.engine.set_params(voice.params)
+        return voice
+
+    def active_voice(self) -> Voice | None:
+        if self.active_id is None:
+            return None
+        return self.voice_by_id(self.active_id)
