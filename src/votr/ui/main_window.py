@@ -35,6 +35,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         self.library.edit_voice.connect(self.show_editor)
         self.library.new_voice.connect(self.show_new_editor)
+        self.library.preview_voice.connect(self.editor.preview.preview_other_voice)
         self.editor.voice_saved.connect(self._after_save)
         self.editor.voice_deleted.connect(self.show_library)
         self.refresh_chrome()

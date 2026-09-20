@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from votr.session import Session
+from votr.ui.preview_panel import PreviewPanel
 
 
 class VoiceEditor(QWidget):
@@ -98,12 +99,11 @@ class VoiceEditor(QWidget):
 
         self.preview_host = QGroupBox("Preview")
         preview_layout = QVBoxLayout(self.preview_host)
-        self.preview_placeholder = QLabel(
-            "Hold to record a Take, then hear it through this Voice."
-        )
-        self.preview_placeholder.setWordWrap(True)
-        preview_layout.addWidget(self.preview_placeholder)
+
+        self.preview = PreviewPanel(self.session)
+        preview_layout.addWidget(self.preview)
         root.addWidget(self.preview_host)
+        self.installEventFilter(self.preview)
 
         buttons = QHBoxLayout()
         save = QPushButton("Save")
@@ -189,6 +189,7 @@ class VoiceEditor(QWidget):
             return
         self.session.draft.params[key] = value
         self.session.engine.set_params({key: value})
+        self.preview.schedule_replay()
 
     def save(self) -> None:
         self.session.save_draft()

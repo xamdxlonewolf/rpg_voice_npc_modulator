@@ -25,6 +25,8 @@ class Session:
         self.draft = Voice.new()
         self.active_id: str | None = None
         self.roleplay_on = False
+        self.take: object | None = None
+        self.auto_replay = True
         self._saved = self.draft.to_dict()
 
     def is_dirty(self) -> bool:
