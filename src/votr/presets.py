@@ -3,8 +3,10 @@
 
 """Voice presets: named slider recipes plus Tone Tags, bundled as presets.json.
 
-A preset is a starting point. Using one creates a fresh draft Voice the GM can
-Preview and tune; it is not a link, so later edits never change the preset.
+A preset is a template. Using one creates a draft Voice the GM can Preview, tune
+and Save; the saved Voice remembers which preset it came from (``Voice.preset``)
+so opening that preset again opens the GM's saved version, never the bundled
+recipe over it. Bundled recipes are never edited on disk.
 """
 
 from __future__ import annotations
@@ -56,4 +58,5 @@ def voice_from_preset(preset: Preset) -> Voice:
     voice.tone_tags = list(preset.tone_tags)
     voice.params = dict(preset.params)
     voice.colour = preset.colour
+    voice.preset = preset.name
     return voice
