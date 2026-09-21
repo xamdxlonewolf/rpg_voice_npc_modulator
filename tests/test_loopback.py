@@ -10,12 +10,19 @@ import numpy as np
 import pytest
 
 from votr.loopback import (
+    _IID_CAPTURE,
+    _IID_CLIENT,
+    _PKEY_NAME,
     ORIGIN_PLAYBACK,
     ORIGIN_RECORDED,
     RECORD_MODE_MIC,
     RECORD_MODE_PLAYBACK,
     CapturePlan,
     LoopbackError,
+    _fill_guid,
+    _iid_p,
+    _parse_guid,
+    _wasapi_types,
     _WasapiLoopbackStream,
     find_named_loopback,
     frames_to_mono,
@@ -242,3 +249,82 @@ def test_sounddevice_loopback_kwargs_honest_when_missing(
         sys.modules, "sounddevice", types.SimpleNamespace(WasapiSettings=Settings)
     )
     assert sounddevice_loopback_kwargs() is None
+
+
+def test_wasapi_guid_type_is_cached_and_matches_activate() -> None:
+    """IMMDevice.Activate / PKEY must share one GUID class (no device needed)."""
+    import ctypes
+
+    first = _wasapi_types(ctypes)
+    second = _wasapi_types(ctypes)
+    assert first is second
+    assert first.GUID is second.GUID
+    client = _parse_guid(ctypes, _IID_CLIENT)
+    capture = _parse_guid(ctypes, _IID_CAPTURE)
+    assert type(client) is type(capture) is first.GUID
+    assert client.Data1 == 0x1CB9AD4C
+    assert capture.Data1 == 0xC8ADBD64
+
+    key = first.PROPERTYKEY(_parse_guid(ctypes, _PKEY_NAME), 14)
+    assert type(key.fmtid) is first.GUID
+    assert key.pid == 14
+
+    seen: dict[str, object] = {}
+
+    @ctypes.CFUNCTYPE(
+        ctypes.c_long,
+        ctypes.c_void_p,
+        _iid_p(ctypes),
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_void_p),
+    )
+    def activate(this, riid, clsctx, params, out):
+        seen["same_class"] = type(riid.contents) is first.GUID
+        seen["data1"] = riid.contents.Data1
+        seen["clsctx"] = clsctx
+        return 0
+
+    out = ctypes.c_void_p()
+    hr = activate(None, ctypes.byref(client), 23, None, ctypes.byref(out))
+    assert hr == 0
+    assert seen == {"same_class": True, "data1": 0x1CB9AD4C, "clsctx": 23}
+
+    @ctypes.CFUNCTYPE(
+        ctypes.c_long,
+        ctypes.c_void_p,
+        _iid_p(ctypes),
+        ctypes.POINTER(ctypes.c_void_p),
+    )
+    def get_service(this, riid, out):
+        seen["service"] = type(riid.contents) is first.GUID
+        return 0
+
+    assert get_service(None, ctypes.byref(capture), ctypes.byref(out)) == 0
+    assert seen["service"] is True
+
+
+def test_mismatched_guid_class_cannot_fill_propertykey() -> None:
+    """The bug: a second GUID Structure class is not assignable to PKEY.fmtid."""
+    import ctypes
+
+    types = _wasapi_types(ctypes)
+
+    class OtherGUID(ctypes.Structure):
+        _fields_ = [
+            ("Data1", ctypes.c_uint32),
+            ("Data2", ctypes.c_uint16),
+            ("Data3", ctypes.c_uint16),
+            ("Data4", ctypes.c_ubyte * 8),
+        ]
+
+    other = _fill_guid(OtherGUID, _IID_CLIENT)
+    with pytest.raises(TypeError, match="incompatible types"):
+        types.PROPERTYKEY(other, 14)
+
+
+def test_parse_guid_rejects_junk() -> None:
+    import ctypes
+
+    with pytest.raises(LoopbackError, match="Invalid GUID"):
+        _parse_guid(ctypes, "not-a-guid")
