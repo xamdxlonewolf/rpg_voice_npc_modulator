@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from votr.neural import NEURAL_ENGINE_ID
+from votr.neural_engine import quality_index
 from votr.session import Session
 from votr.ui.clips_panel import MimicClipPanel
 from votr.ui.preview_panel import PreviewPanel
@@ -144,6 +145,49 @@ class VoiceEditor(QWidget):
         self.mimic.clip_chosen.connect(self._on_clip_chosen)
         root.addWidget(self.mimic)
 
+        self.neural_box = QGroupBox("Neural conversion")
+        self.neural_box.setObjectName("neural_box")
+        neural_form = QFormLayout(self.neural_box)
+        mix_row = QHBoxLayout()
+        self.mix_slider = QSlider(Qt.Orientation.Horizontal)
+        self.mix_slider.setObjectName("neural_mix")
+        self.mix_slider.setRange(0, 1000)
+        self.mix_slider.setToolTip(
+            "How hard to convert toward the clip. 0 is your voice; 1 is as "
+            "converted as X-VC gets (one-step, 16 kHz). There is no extra "
+            "hidden mix on top."
+        )
+        self.mix_value = QLabel()
+        self.mix_slider.valueChanged.connect(self._on_mix)
+        mix_row.addWidget(self.mix_slider)
+        mix_row.addWidget(self.mix_value)
+        neural_form.addRow("Mix", mix_row)
+        self.quality_box = QComboBox()
+        self.quality_box.setObjectName("neural_quality")
+        self.quality_box.addItem(
+            "Speed — paper streaming, ~240 ms convert, more joins", 0
+        )
+        self.quality_box.addItem("Balanced — fewer joins, ~360 ms convert", 1)
+        self.quality_box.addItem(
+            "Quality — more lookahead, fewer joins, ~720 ms convert", 2
+        )
+        self.quality_box.setToolTip(
+            "X-VC has no diffusion steps or guidance. These change the "
+            "streaming window (current / lookahead / overlap). Chunk stays "
+            "2.4 s to match training. Preview uses the same path as live."
+        )
+        self.quality_box.currentIndexChanged.connect(self._on_quality)
+        neural_form.addRow("Quality vs speed", self.quality_box)
+        ceiling = QLabel(
+            "Ceiling: one-step X-VC at 16 kHz. Mix 1 is as converted as this "
+            "model gets. A short or noisy clip will never be studio voice "
+            "conversion."
+        )
+        ceiling.setWordWrap(True)
+        ceiling.setObjectName("neural_ceiling")
+        neural_form.addRow(ceiling)
+        root.addWidget(self.neural_box)
+
         sliders = QGroupBox("Sound")
         self.sliders_box = sliders
         slider_form = QFormLayout(sliders)
@@ -193,10 +237,20 @@ class VoiceEditor(QWidget):
         self.engine_box.setCurrentIndex(1 if neural else 0)
         self.engine_box.blockSignals(False)
         self.mimic.setVisible(neural)
+        self.neural_box.setVisible(neural)
         self.sliders_box.setVisible(not neural)
         self.engine_status.setVisible(neural)
         if neural:
             self.mimic.refresh()
+            mix = float(draft.params.get("mix", 1.0))
+            self.mix_slider.blockSignals(True)
+            self.mix_slider.setValue(int(round(mix * 1000)))
+            self.mix_slider.blockSignals(False)
+            self.mix_value.setText(f"{mix:.2f}")
+            quality = quality_index(draft.params.get("quality", 1.0))
+            self.quality_box.blockSignals(True)
+            self.quality_box.setCurrentIndex(quality)
+            self.quality_box.blockSignals(False)
             if self.session.neural_loading:
                 state = "Loading Neural Engine…"
             elif self.session.neural_error:
@@ -309,6 +363,29 @@ class VoiceEditor(QWidget):
     def _on_clip_chosen(self, _clip_id: str) -> None:
         self.reload_from_draft()
         self.preview.schedule_replay()
+
+    def _on_mix(self, pos: int) -> None:
+        value = pos / 1000.0
+        self.mix_value.setText(f"{value:.2f}")
+        if self._loading:
+            return
+        self.session.draft.params["mix"] = value
+        self._push_neural_params()
+        self.preview.schedule_replay()
+
+    def _on_quality(self, _index: int) -> None:
+        if self._loading:
+            return
+        value = int(self.quality_box.currentData() or 1)
+        self.session.draft.params["quality"] = float(quality_index(value))
+        self._push_neural_params()
+        self.preview.schedule_replay()
+
+    def _push_neural_params(self) -> None:
+        engine = self.session.neural_engine
+        if engine is None:
+            return
+        engine.set_params(self.session.resolved_params(self.session.draft.params))
 
     def design_from_hints(self) -> None:
         prompt = self.hints_edit.toPlainText()

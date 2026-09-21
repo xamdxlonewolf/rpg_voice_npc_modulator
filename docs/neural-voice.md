@@ -169,18 +169,33 @@ pins (torch 2.5.1 / transformers 4.44.1) are not needed.
 1. **Roleplay Mode** still uses the DSP Engine for Neural Voices (S7.4 next slice).
 2. **Installer** is the DSP `--onedir` + Inno Setup path (`docs/install-windows.md`).
    Neural still needs this checkout, `pip install -e ".[neural]"`, and the packs.
-3. **Quality and latency numbers** are the publishers'; nothing measured here yet.
+3. **Quality vs speed** is the streaming window (see below), not a measured
+   studio-vs-live renderer. Convert latency figures are the window geometry
+   (current + overlap + future), not a glass-to-glass measurement here.
 4. `descript-audiotools` stays out of the `neural` extra (protobuf conflict); a stand-in
    module covers X-VC's import. Training X-VC would need it in its own environment.
 
 ## Making a Neural Voice in the editor (mimic clips)
 
 In the Voice editor, the **Engine** dropdown switches between *Your voice, shaped
-(DSP)* and *Mimic a clip (Neural)*. Choosing Neural hides the sliders and shows the
-**Mimic clip** panel:
+(DSP)* and *Mimic a clip (Neural)*. Choosing Neural hides the DSP sliders and shows the
+**Mimic clip** panel plus **Neural conversion** (Mix and Quality vs speed):
 
+- **Mix** (0 = your voice, 1 = converted) — how hard X-VC converts vs keeping the Take.
+  Mix 1 is as converted as this model gets. There is no hidden extra mix.
+- **Quality vs speed** — X-VC is one-step codec conversion: it has **no** diffusion
+  steps and **no** guidance scale. The real knobs are the streaming window (chunk
+  stays 2.4 s to match training):
+  - Speed: paper streaming (120 ms current + 20 ms overlap + 100 ms future, ~240 ms
+    convert latency, more joins).
+  - Balanced: 240 / 20 / 100 ms (~360 ms, fewer joins). Default.
+  - Quality: 480 / 40 / 200 ms (~720 ms, more lookahead, fewer joins).
+  Preview uses the same streaming path as live (ADR-0005); this is not an offline
+  renderer.
 - **Record (30 s max)** — records from the mic with a remaining-time bar, auto-stops at
-  30 s, asks for a name, saves the clip and uses it.
+  30 s, asks for a name, saves the clip and uses it. Mic gain (Settings / Preview /
+  Roleplay) applies to this path. The whole clip is the reference — do not record 3 s
+  when you can give it 20–30 s of clear speech.
 - **Record what's playing** — records the audio already coming out of the selected
   playback device (Windows WASAPI loopback / default output), not the microphone.
   Same 30 s cap, countdown, name/save/use and Play. Use this for a video's
@@ -190,6 +205,12 @@ In the Voice editor, the **Engine** dropdown switches between *Your voice, shape
   silence trimmed, capped at 30 s.
 - Dropdown + **Use this clip** — pick any library clip for this Voice; **Rename…** and
   **Delete** manage the library.
+
+**Ceiling:** a small or noisy clip will never be studio voice conversion. X-VC converts
+timbre at 16 kHz. Quiet clips are stored as recorded (not peak-boosted — boosting the
+noise floor washes identity); X-VC's own `volume_normalize` still conditions the model.
+Preview restores the Take's level after that (so Mic gain is what makes a quiet Take
+louder). Clip Play is the stored clip, not a quieter copy of your Take.
 
 Clips live in `<data folder>/clips/` as `<id>.wav` + `<id>.json`. A Voice stores
 `reference_clip_id` (authoritative) and `reference_clip` (path, re-derived from the id on

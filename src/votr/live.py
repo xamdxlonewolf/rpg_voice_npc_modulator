@@ -101,6 +101,8 @@ class DuplexStream:
         self.output_peak = 0.0
         self.lost = False
         self.monitor_ring: BlockRing | None = None
+        # Linear capture gain; 1.0 is unity (no multiply in the callback).
+        self.input_gain = 1.0
 
     def is_muted(self) -> bool:
         return self.muted or (self.hold_to_talk and not self.talk_held)
@@ -133,6 +135,9 @@ class DuplexStream:
         if frames != self.engine.block_size:
             return
         self._in[:] = indata[:, 0]
+        gain = self.input_gain
+        if gain != 1.0:
+            self._in *= gain
         self.input_peak = float(np.max(np.abs(self._in)))
         processed = self.engine.process_block(self._in)
         if self.is_muted():

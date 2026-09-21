@@ -5,6 +5,18 @@ Windows installer artifacts are attached to GitHub Releases on `v*` tags.
 
 ## Unreleased
 
+- **Mic gain** slider (−12 to +24 dB, default 0 dB = unity) on Settings →
+  Devices, Hold-to-record Preview, and Roleplay Mode. Applied to the captured
+  mic path *before* the Engine; no extra silent boost. A level readout shows
+  quiet vs clipping. Persists in ``settings.json``.
+
+- Neural mimic: **Mix** and **Quality vs speed** are in the Neural editor.
+  Mix was already in the Engine (hidden while DSP sliders were hidden).
+  Quality vs speed is X-VC's streaming window (current / lookahead / overlap);
+  there are no diffusion steps or guidance. The whole 30 s clip is the
+  reference (soxr VHQ when the neural extra is present). Quiet clips are
+  stored as recorded, not peak-boosted.
+
 - Launch: when Neural is enabled (GPU + X-VC pack, or a saved Neural Voice),
   the app paints first, then loads X-VC on a worker thread under a
   **Loading Neural Engine…** spinner so Windows does not sit Not Responding.

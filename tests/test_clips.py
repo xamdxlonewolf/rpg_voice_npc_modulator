@@ -154,6 +154,7 @@ def test_session_selects_saves_and_reloads_a_mimic_clip(tmp_path: Path) -> None:
     session.set_engine_kind(NEURAL_ENGINE_ID)
     assert session.draft.engine_id == NEURAL_ENGINE_ID
     assert session.draft.params["mix"] == 1.0
+    assert session.draft.params["quality"] == 1.0
     assert session.use_clip(clip.id) is not None
     assert session.draft_clip().id == clip.id
     assert session.draft.params[REFERENCE_CLIP_KEY] == str(
@@ -198,9 +199,9 @@ def test_clips_are_stored_at_a_healthy_level_and_remember_source_peak(
     library = ClipLibrary(tmp_path)
     quiet = library.add(_speech(3.0) * 0.02, CLIP_SAMPLE_RATE, "quiet mic")
     assert quiet.source_peak_db == pytest.approx(-44.4, abs=0.5)
-    assert quiet.was_quiet and "boosted" in quiet.level_note
+    assert quiet.was_quiet and "not boosted" in quiet.level_note
     samples, _ = library.load(quiet.id)
-    assert float(np.max(np.abs(samples))) == pytest.approx(0.9, abs=0.01)
+    assert float(np.max(np.abs(samples))) == pytest.approx(0.006, abs=0.001)
     hot = library.add(_speech(3.0) * 3.0, CLIP_SAMPLE_RATE, "hot")
     assert not hot.was_quiet
     assert float(np.max(np.abs(library.load(hot.id)[0]))) == pytest.approx(

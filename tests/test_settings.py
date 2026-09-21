@@ -59,6 +59,17 @@ def test_settings_dialog_has_about_and_latency(tmp_path: Path) -> None:
     assert "First-run setup…" in names
     dialog._save()
     assert session.settings.panic_hotkey
+    assert dialog.mic_gain.slider.objectName() == "mic_gain"
+    assert session.settings.mic_gain_db == 0.0
+    from votr.gain import db_to_slider, slider_to_db
+
+    dialog.mic_gain.slider.setValue(db_to_slider(6.0))
+    assert session.settings.mic_gain_db == pytest.approx(
+        slider_to_db(db_to_slider(6.0))
+    )
+    assert Session(tmp_path).settings.mic_gain_db == pytest.approx(
+        session.settings.mic_gain_db
+    )
     about = dialog.findChild(type(dialog.neural_report), "about_install_note")
     assert about is not None
     assert "DSP" in about.text()

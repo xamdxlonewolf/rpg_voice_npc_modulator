@@ -345,6 +345,7 @@ class NeuralDesigner:
                 REFERENCE_CLIP_ID_KEY: clip.id,
                 REFERENCE_CLIP_KEY: str(library.path_for(clip.id)),
                 "mix": 1.0,
+                "quality": 1.0,
             },
             matched=[prompt.strip()],
             notes=[

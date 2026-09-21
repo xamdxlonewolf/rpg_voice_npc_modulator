@@ -170,7 +170,9 @@ class XvcConverter:
         return self._torch.from_numpy(array)[None, None, :].to(self._device)
 
     def set_reference(self, clip: np.ndarray, sample_rate: int) -> None:
-        clip = _resample_linear(clip, sample_rate, self.sample_rate)
+        # Whole clip (up to the library's 30 s cap). Do not crop to a few
+        # seconds — the speaker embedding and frame condition both see it.
+        clip = resample_to(clip, sample_rate, self.sample_rate)
         target = self._tensor(self.normalize(clip))
         self._speaker, self._frame = self._infer.precompute_conditions(
             self._model, target, target
@@ -352,11 +354,24 @@ def patch_xvc_config(cfg: Any, root: Path) -> Any:
     return cfg
 
 
-def _resample_linear(samples: np.ndarray, rate_in: int, rate_out: int) -> np.ndarray:
-    """Plain linear resampling for reference clips (quality is not critical)."""
+def resample_to(samples: np.ndarray, rate_in: int, rate_out: int) -> np.ndarray:
+    """Resample a clip to ``rate_out``.
+
+    Uses soxr VHQ when the neural extra is installed (same as X-VC's
+    ``load_audio``). Falls back to linear interpolation otherwise — tests
+    and DSP-only installs do not require soxr.
+    """
     x = np.asarray(samples, dtype=np.float32).reshape(-1)
-    if rate_in == rate_out or x.size == 0:
+    if int(rate_in) == int(rate_out) or x.size == 0:
         return x
-    n_out = int(round(x.size * rate_out / rate_in))
-    positions = np.linspace(0.0, x.size - 1, n_out)
-    return np.interp(positions, np.arange(x.size), x).astype(np.float32)
+    try:
+        import soxr
+
+        return np.asarray(
+            soxr.resample(x, int(rate_in), int(rate_out), quality="VHQ"),
+            dtype=np.float32,
+        )
+    except Exception:
+        n_out = max(1, int(round(x.size * rate_out / rate_in)))
+        positions = np.linspace(0.0, x.size - 1, n_out)
+        return np.interp(positions, np.arange(x.size), x).astype(np.float32)

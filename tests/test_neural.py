@@ -239,6 +239,7 @@ def test_neural_designer_makes_a_reference_clip_when_ready(tmp_path: Path) -> No
     assert stored is not None and stored.origin == "designed"
     assert stored.name == "Weary Old Ferryman"
     assert design.params["mix"] == 1.0
+    assert design.params["quality"] == 1.0
     assert design.name == "Weary Old Ferryman"
     assert any("Accent is still yours" in note for note in design.notes)
 

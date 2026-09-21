@@ -162,6 +162,7 @@ class Session:
         self.draft.engine_id = engine_id
         if engine_id == NEURAL_ENGINE_ID:
             self.draft.params.setdefault("mix", 1.0)
+            self.draft.params.setdefault("quality", 1.0)
 
     def use_clip(self, clip_id: str) -> Clip | None:
         """Make ``clip_id`` the draft's mimic reference; updates a loaded Engine."""

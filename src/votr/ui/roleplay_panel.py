@@ -20,6 +20,7 @@ from votr.devices import monitor_looks_like_speakers
 from votr.live import AudioDeviceError
 from votr.roleplay import RoleplayError
 from votr.session import Session
+from votr.ui.mic_gain import MicGainSlider
 
 _RECEIVING_PEAK = 0.02
 
@@ -49,6 +50,8 @@ class RoleplayPanel(QGroupBox):
         self.in_meter = QProgressBar()
         self.in_meter.setRange(0, 100)
         layout.addWidget(self.in_meter)
+        self.mic_gain = MicGainSlider(session)
+        layout.addWidget(self.mic_gain)
         layout.addWidget(QLabel("Virtual Cable"))
         self.out_meter = QProgressBar()
         self.out_meter.setRange(0, 100)
@@ -126,6 +129,7 @@ class RoleplayPanel(QGroupBox):
                 self.monitor.isChecked() and monitor_looks_like_speakers(speaker)
             )
         self.hold_btn.setVisible(self.hold.isChecked())
+        self.mic_gain.sync_from_settings()
 
     def toggle_panic(self) -> None:
         if not self.session.roleplay_on:
@@ -169,6 +173,8 @@ class RoleplayPanel(QGroupBox):
         peak_out = int(min(100, self.session.path.output_peak() * 100))
         self.in_meter.setValue(peak_in)
         self.out_meter.setValue(peak_out)
+        if self.session.roleplay_on:
+            self.mic_gain.set_peak(self.session.path.input_peak())
         receiving = (
             self.session.roleplay_on
             and not self.session.path.is_muted()

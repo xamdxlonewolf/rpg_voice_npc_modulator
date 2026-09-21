@@ -31,7 +31,14 @@ NEURAL_ENGINE_ID = "neural-v0"
 REFERENCE_CLIP_KEY = "reference_clip"
 
 SCHEMA: tuple[ParameterSpec, ...] = (
-    ParameterSpec("mix", "Neural mix (0 = your voice, 1 = converted)", 0.0, 1.0, 1.0),
+    ParameterSpec("mix", "Mix (0 = your voice, 1 = converted)", 0.0, 1.0, 1.0),
+    ParameterSpec(
+        "quality",
+        "Quality vs speed (0 = speed, 1 = balanced, 2 = quality)",
+        0.0,
+        2.0,
+        1.0,
+    ),
 )
 _DEFAULTS = {spec.key: spec.default for spec in SCHEMA}
 
@@ -73,6 +80,25 @@ class StreamWindow:
             raise ValueError("current_ms must be > 0")
         if self.history_ms < 0:
             raise ValueError("chunk must cover current + smooth + future")
+
+
+# X-VC is one-step codec conversion: no diffusion steps, no guidance scale.
+# The real knobs are the streaming window (chunk stays 2400 ms to match training).
+# Speed = paper streaming (120 ms current + 20 ms overlap + 100 ms future).
+# Quality = fewer joins and more lookahead, higher convert latency.
+QUALITY_WINDOWS: tuple[StreamWindow, ...] = (
+    StreamWindow(chunk_ms=2400, current_ms=120, future_ms=100, smooth_ms=20),
+    StreamWindow(chunk_ms=2400, current_ms=240, future_ms=100, smooth_ms=20),
+    StreamWindow(chunk_ms=2400, current_ms=480, future_ms=200, smooth_ms=40),
+)
+
+
+def quality_index(value: float) -> int:
+    return int(max(0, min(len(QUALITY_WINDOWS) - 1, round(float(value)))))
+
+
+def window_for_quality(value: float) -> StreamWindow:
+    return QUALITY_WINDOWS[quality_index(value)]
 
 
 def _lowpass_fir(cutoff: float, taps: int) -> np.ndarray:
@@ -147,13 +173,18 @@ class NeuralEngine(BaseEngine):
         self._params: dict[str, Any] = dict(_DEFAULTS)
         self._reference_path = ""
         self._has_reference = False
-        ms = model_rate / 1000.0
+        self._apply_window(window)
+        self._reset_streams()
+
+    def _apply_window(self, window: StreamWindow) -> None:
+        window.validate()
+        self._window = window
+        ms = self._model_rate / 1000.0
         self._cur = int(window.current_ms * ms)
         self._fut = int(window.future_ms * ms)
         self._smooth = int(window.smooth_ms * ms)
         self._hist = int(window.history_ms * ms)
         self._latency = self._cur + self._smooth + self._fut
-        self._reset_streams()
 
     # -- Engine protocol -----------------------------------------------------
 
@@ -177,11 +208,23 @@ class NeuralEngine(BaseEngine):
         return self._reference_path
 
     def set_params(self, params: dict[str, Any], **_ignored: Any) -> None:
+        quality_changed = False
         for key, value in params.items():
             if key == REFERENCE_CLIP_KEY:
                 self.set_reference_clip(str(value or ""))
+            elif key == "quality":
+                index = quality_index(value)
+                self._params["quality"] = float(index)
+                wanted = QUALITY_WINDOWS[index]
+                if wanted != self._window:
+                    self._apply_window(wanted)
+                    quality_changed = True
+            elif key == "mix":
+                self._params["mix"] = min(1.0, max(0.0, float(value)))
             elif key in _DEFAULTS:
                 self._params[key] = float(value)
+        if quality_changed:
+            self.reset()
 
     def params(self) -> dict[str, Any]:
         merged = dict(self._params)
@@ -307,7 +350,9 @@ class NeuralEngine(BaseEngine):
             return samples.copy()
         latency = self.latency_frames()
         # Condition the whole Take the way the model expects (X-VC's
-        # volume_normalize), then restore the GM's level afterwards.
+        # volume_normalize — that is model input, not a volume knob). Then
+        # restore the Take's own level so a quiet mic stays quiet unless the
+        # GM raised Mic gain. No extra silent boost on top.
         normalize = getattr(self._converter, "normalize", None)
         source = normalize(samples) if callable(normalize) else samples
         padded = np.concatenate(

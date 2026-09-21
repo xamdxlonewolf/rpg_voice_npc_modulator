@@ -62,13 +62,13 @@ class Clip:
         if self.was_quiet:
             if self.origin == ORIGIN_PLAYBACK:
                 note += (
-                    " — quiet; it was boosted, but turn the video up for a "
-                    "cleaner mimic"
+                    " — quiet. Stored as recorded (not boosted); turn the "
+                    "video up for a cleaner mimic"
                 )
             else:
                 note += (
-                    " — quiet; it was boosted, but get closer to the mic for a "
-                    "cleaner mimic"
+                    " — quiet. Stored as recorded (not boosted); get closer "
+                    "to the mic or raise Mic gain"
                 )
         return note
 
@@ -184,14 +184,15 @@ class ClipLibrary:
         if seconds < MIN_CLIP_SECONDS:
             raise ClipError(
                 f"Clip is {seconds:.1f} s of sound; a mimic clip needs at least "
-                f"{MIN_CLIP_SECONDS:.0f} s (5–10 s of clear speech is ideal)."
+                f"{MIN_CLIP_SECONDS:.0f} s (10–30 s of clear speech is better)."
             )
         peak = float(np.max(np.abs(audio)))
         source_peak_db = 20.0 * np.log10(max(peak, 1e-6))
-        # Store at a healthy, consistent level: audible on playback and the
-        # Engine's own normalisation has less to do.
-        if peak > 1e-6:
-            audio = audio / peak * CLIP_TARGET_PEAK
+        # Peak-limit hot clips so playback does not crackle. Do not boost
+        # quiet ones: that raises the noise floor and washes identity. X-VC
+        # has its own volume_normalize for the model.
+        if peak > CLIP_TARGET_PEAK:
+            audio = audio * (CLIP_TARGET_PEAK / peak)
         clip = Clip(
             id=str(uuid4()),
             name=self.unique_name(name.strip() or "Mimic clip"),

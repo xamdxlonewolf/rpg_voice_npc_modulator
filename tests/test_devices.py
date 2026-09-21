@@ -122,6 +122,10 @@ def test_settings_round_trip(tmp_path: Path) -> None:
     loaded = DeviceSettings.load(tmp_path)
     assert loaded.mic_name == "Microphone"
     assert loaded.wizard_completed is True
+    assert loaded.mic_gain_db == 0.0
+    settings = DeviceSettings(mic_name="Microphone", mic_gain_db=12.0)
+    settings.save(tmp_path)
+    assert DeviceSettings.load(tmp_path).mic_gain_db == 12.0
     assert DeviceSettings.load(tmp_path / "missing").mic_name == ""
 
 

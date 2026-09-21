@@ -30,6 +30,7 @@ from votr.clips import (
     ORIGIN_RECORDED,
     ClipError,
 )
+from votr.gain import apply_mic_gain
 from votr.loopback import (
     RECORD_MODE_MIC,
     RECORD_MODE_PLAYBACK,
@@ -68,10 +69,12 @@ class MimicClipPanel(QGroupBox):
     def _build(self) -> None:
         root = QVBoxLayout(self)
         hint = QLabel(
-            "5–10 seconds of clear speech from the voice you want. Record the mic, "
-            "Record what's playing (the video's audio from your speakers), or "
-            "upload a WAV/FLAC/MP3. Clips live in your data folder; one clip can "
-            "serve many Voices."
+            "10–30 seconds of clear speech from the voice you want is better "
+            "than a short clip (30 s max; the whole recording is used). Record "
+            "the mic, Record what's playing (the video's audio from your "
+            "speakers), or upload a WAV/FLAC/MP3. A small or noisy clip will "
+            "never be studio conversion. Clips live in your data folder; one "
+            "clip can serve many Voices."
         )
         hint.setWordWrap(True)
         root.addWidget(hint)
@@ -393,7 +396,10 @@ class MimicClipPanel(QGroupBox):
         audio = (
             np.concatenate(self._chunks) if self._chunks else np.zeros(0, np.float32)
         )
-        return self.save_recording(audio, name, origin=self._record_origin)
+        origin = self._record_origin
+        if origin == ORIGIN_RECORDED:
+            audio = apply_mic_gain(audio, self.session.settings.mic_gain_db)
+        return self.save_recording(audio, name, origin=origin)
 
     def save_recording(
         self,
