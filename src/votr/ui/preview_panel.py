@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from votr.gain import apply_mic_gain, peak_meter
 from votr.neural import NEURAL_ENGINE_ID
 from votr.preview import (
     MAX_TAKE_SECONDS,
@@ -31,6 +32,7 @@ from votr.preview import (
     stop_playback,
 )
 from votr.session import Session
+from votr.ui.mic_gain import MicGainSlider
 
 
 class PreviewPanel(QWidget):
@@ -41,6 +43,10 @@ class PreviewPanel(QWidget):
         self._compare_dry = False
         self._chunks: list = []
         self._stream = None
+        self._record_peak = 0.0
+        self._meter_tick = QTimer(self)
+        self._meter_tick.setInterval(50)
+        self._meter_tick.timeout.connect(self._update_record_meter)
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(300)
@@ -65,6 +71,8 @@ class PreviewPanel(QWidget):
         self.record.pressed.connect(self._start_record)
         self.record.released.connect(self._stop_record)
         root.addWidget(self.record)
+        self.mic_gain = MicGainSlider(self.session)
+        root.addWidget(self.mic_gain)
         row = QHBoxLayout()
         play = QPushButton("Play again")
         play.clicked.connect(lambda: self.render_and_play(force=True))
@@ -104,8 +112,10 @@ class PreviewPanel(QWidget):
     def _start_record(self) -> None:
         self._recording = True
         self._chunks = []
+        self._record_peak = 0.0
         self.countdown.setText(f"0 / {MAX_TAKE_SECONDS}s")
         self.meter.setValue(0)
+        self.mic_gain.sync_from_settings()
         if not input_devices():
             return
         try:
@@ -121,14 +131,29 @@ class PreviewPanel(QWidget):
                 callback=callback,
             )
             self._stream.start()
+            self._meter_tick.start()
         except Exception:
             self._stream = None
+
+    def _update_record_meter(self) -> None:
+        if not self._chunks:
+            return
+        gained = apply_mic_gain(self._chunks[-1], self.session.settings.mic_gain_db)
+        peak, clipping = peak_meter(gained)
+        self._record_peak = max(self._record_peak, peak)
+        self.meter.setValue(int(min(100, peak * 100)))
+        self.mic_gain.set_peak(self._record_peak)
+        elapsed = sum(chunk.size for chunk in self._chunks) / 48_000
+        self.countdown.setText(f"{elapsed:.1f} / {MAX_TAKE_SECONDS}s")
+        if clipping:
+            self.countdown.setText(self.countdown.text() + " — clipping")
 
     def _stop_record(self) -> None:
         if not self._recording:
             return
         self._recording = False
         self.record.setChecked(False)
+        self._meter_tick.stop()
         if self._stream is not None:
             try:
                 self._stream.stop()
@@ -139,12 +164,15 @@ class PreviewPanel(QWidget):
         if self._chunks:
             take = np.concatenate(self._chunks)
             take = take[: int(MAX_TAKE_SECONDS * 48_000)]
+            take = apply_mic_gain(take, self.session.settings.mic_gain_db)
         else:
             take = load_sample_take()
         self.session.take = take
         save_last_take(self.session.store.root.parent, take)
-        self.meter.setValue(int(min(100, float(abs(take).max()) * 100)))
-        self.countdown.setText("Take ready")
+        peak, clipping = peak_meter(take)
+        self.meter.setValue(int(min(100, peak * 100)))
+        self.mic_gain.set_peak(peak)
+        self.countdown.setText("Take ready" + (" — clipped" if clipping else ""))
         self.render_and_play(force=True)
 
     def schedule_replay(self) -> None:

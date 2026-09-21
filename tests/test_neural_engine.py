@@ -16,6 +16,8 @@ from votr.neural_engine import (
     NeuralUnavailable,
     StreamWindow,
     _Resampler,
+    quality_index,
+    window_for_quality,
 )
 from votr.wavutil import write_wav
 
@@ -79,8 +81,9 @@ def test_engine_declares_itself_and_rejects_odd_rates(tmp_path: Path) -> None:
     assert engine.engine_id == NEURAL_ENGINE_ID
     caps = engine.capabilities()
     assert caps.changes_identity and caps.requires_gpu
-    assert [spec.key for spec in engine.parameter_schema()] == ["mix"]
+    assert [spec.key for spec in engine.parameter_schema()] == ["mix", "quality"]
     assert engine.params()["mix"] == 1.0
+    assert engine.params()["quality"] == 1.0
     assert engine.params()[REFERENCE_CLIP_KEY].endswith("ref.wav")
     assert converter.reference == (24_000, RATE)
     assert engine.has_reference
@@ -199,3 +202,41 @@ def test_render_conditions_input_and_never_hard_clips(tmp_path: Path) -> None:
     # Spikes are tamed by peak scaling, not chopped flat at ±1.
     assert float(np.max(np.abs(out))) <= 0.97 + 1e-6
     assert not np.any(np.abs(out) == 1.0)
+
+
+def test_quality_changes_joins_and_latency_not_chunk_length(tmp_path: Path) -> None:
+    engine, converter = _engine(tmp_path)
+    take = _speech(1.0)
+    engine.render(take)
+    balanced_n = len(converter.windows)
+    balanced_lat = engine.latency_frames()
+    assert converter.windows and all(size == 2400 * 16 for size in converter.windows)
+    assert quality_index(1) == 1
+    assert window_for_quality(1).current_ms == 240
+
+    converter.windows.clear()
+    engine.set_params({"quality": 0})
+    engine.render(take)
+    assert all(size == 2400 * 16 for size in converter.windows)
+    assert len(converter.windows) > balanced_n
+    assert engine.latency_frames() < balanced_lat
+    assert engine.params()["quality"] == 0.0
+
+    converter.windows.clear()
+    engine.set_params({"quality": 2})
+    engine.render(take)
+    assert all(size == 2400 * 16 for size in converter.windows)
+    assert len(converter.windows) < balanced_n
+    assert engine.latency_frames() > balanced_lat
+
+
+def test_resample_to_keeps_duration_ratio() -> None:
+    from votr.neural_backends import resample_to
+
+    t = np.arange(48_000) / 48_000.0
+    x = (0.2 * np.sin(2 * np.pi * 220 * t)).astype(np.float32)
+    y = resample_to(x, 48_000, 16_000)
+    assert y.size == pytest.approx(16_000, abs=2)
+    same = resample_to(x, 48_000, 48_000)
+    np.testing.assert_array_equal(same, x)
+    assert resample_to(np.zeros(0, np.float32), 48_000, 16_000).size == 0

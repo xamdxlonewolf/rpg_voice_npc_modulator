@@ -16,6 +16,7 @@ from votr.devices import (
     has_virtual_cable,
 )
 from votr.engine import Engine
+from votr.gain import clip_mic_gain_db, db_to_linear
 from votr.live import AudioDeviceError, BlockRing, DuplexStream, query_devices
 
 
@@ -58,6 +59,7 @@ class RoleplayPath:
             output_device=device_ref(cable),
         )
         stream.hold_to_talk = self.settings.hold_to_talk
+        stream.input_gain = self.settings.mic_gain_linear()
         if self.settings.monitor_on:
             stream.monitor_ring = BlockRing(self.engine.block_size)
         stream.start()
@@ -88,6 +90,12 @@ class RoleplayPath:
         self.settings.hold_to_talk = enabled
         if self.stream is not None:
             self.stream.hold_to_talk = enabled
+
+    def set_mic_gain_db(self, gain_db: float) -> None:
+        """Apply capture gain to the live mic path. 0 dB is unity."""
+        self.settings.mic_gain_db = clip_mic_gain_db(gain_db)
+        if self.stream is not None:
+            self.stream.input_gain = db_to_linear(self.settings.mic_gain_db)
 
     def set_monitor(self, enabled: bool) -> None:
         self.settings.monitor_on = enabled

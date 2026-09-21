@@ -44,6 +44,7 @@ from votr.paths import license_path, notices_path
 from votr.preview import speaker_devices
 from votr.session import Session
 from votr.store import default_data_dir
+from votr.ui.mic_gain import MicGainSlider
 
 
 class PackDownloadWorker(QThread):
@@ -132,6 +133,8 @@ class SettingsDialog(QDialog):
         layout.addRow("Microphone", self.mic)
         layout.addRow("Speakers", self.speakers)
         layout.addRow("Virtual Cable", QLabel(str(cable_name)))
+        self.mic_gain = MicGainSlider(self.session)
+        layout.addRow(self.mic_gain)
         return page
 
     def _latency_tab(self) -> QWidget:

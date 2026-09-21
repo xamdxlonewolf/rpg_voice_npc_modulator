@@ -80,8 +80,9 @@ CONVERSION_PACK = ModelPack(
     pack_id="xvc",
     title="X-VC zero-shot voice conversion",
     summary=(
-        "Sound like a different person from a 5–10 s reference clip. 16 kHz "
-        "streaming model; NVIDIA GPU with about 6 GB free memory."
+        "Sound like a different person from a reference clip (10–30 s of "
+        "clear speech is better; 30 s max). 16 kHz streaming model; NVIDIA "
+        "GPU with about 6 GB free memory."
     ),
     files=(
         PackFile(

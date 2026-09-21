@@ -17,6 +17,7 @@ from typing import Any
 import numpy as np
 
 from votr.engine import DEFAULT_SAMPLE_RATE
+from votr.gain import MIC_GAIN_DEFAULT_DB, clip_mic_gain_db, db_to_linear
 from votr.live import query_devices
 from votr.preview import input_devices, speaker_devices
 
@@ -228,6 +229,15 @@ def _opt_float(value: Any) -> float | None:
         return None
 
 
+def _opt_gain_db(data: dict[str, Any]) -> float:
+    if "mic_gain_db" not in data:
+        return MIC_GAIN_DEFAULT_DB
+    parsed = _opt_float(data.get("mic_gain_db"))
+    if parsed is None:
+        return MIC_GAIN_DEFAULT_DB
+    return clip_mic_gain_db(parsed)
+
+
 @dataclass
 class DeviceSettings:
     mic_name: str = ""
@@ -245,6 +255,11 @@ class DeviceSettings:
     latency_method: str = ""
     latency_blocked: str = ""
     panic_hotkey: str = "Ctrl+Shift+M"
+    # Capture gain before Engine/Preview/Roleplay. 0 dB is unity.
+    mic_gain_db: float = MIC_GAIN_DEFAULT_DB
+
+    def mic_gain_linear(self) -> float:
+        return db_to_linear(self.mic_gain_db)
 
     def save(self, data_dir: Path) -> Path:
         path = Path(data_dir) / "settings.json"
@@ -279,6 +294,7 @@ class DeviceSettings:
                 latency_method=str(data.get("latency_method", "")),
                 latency_blocked=str(data.get("latency_blocked", "")),
                 panic_hotkey=str(data.get("panic_hotkey") or "Ctrl+Shift+M"),
+                mic_gain_db=_opt_gain_db(data),
             )
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             return cls()

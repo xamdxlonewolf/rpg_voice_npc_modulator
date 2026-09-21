@@ -209,14 +209,26 @@ def test_editor_neural_voice_picks_uploads_and_records_clips(
     # DSP by default: sliders shown, mimic panel hidden.
     assert editor.engine_box.currentData() == "dsp-v1"
     assert not editor.mimic.isVisibleTo(editor)
+    assert not editor.neural_box.isVisibleTo(editor)
     assert editor.sliders_box.isVisibleTo(editor)
 
     # Switch to Neural: mimic panel appears, honest status, no clips yet.
     editor.engine_box.setCurrentIndex(1)
     assert session.draft.engine_id == NEURAL_ENGINE_ID
     assert editor.mimic.isVisibleTo(editor)
+    assert editor.neural_box.isVisibleTo(editor)
     assert not editor.sliders_box.isVisibleTo(editor)
     assert "not ready" in editor.engine_status.text()
+    assert editor.mix_slider.value() == 1000
+    assert editor.quality_box.currentData() == 1
+    editor.mix_slider.setValue(500)
+    assert session.draft.params["mix"] == pytest.approx(0.5)
+    editor.quality_box.setCurrentIndex(2)
+    assert session.draft.params["quality"] == 2.0
+    editor.mix_slider.setValue(1000)
+    editor.quality_box.setCurrentIndex(1)
+    assert session.draft.params["mix"] == pytest.approx(1.0)
+    assert session.draft.params["quality"] == 1.0
     assert "No clips yet" in editor.mimic.clip_box.currentText()
     assert not editor.mimic.use_button.isEnabled()
 
