@@ -103,6 +103,25 @@ def test_detect_tolerates_a_broken_driver(monkeypatch: pytest.MonkeyPatch) -> No
 # --- runtime gate ------------------------------------------------------------
 
 
+def test_probe_can_skip_torch_when_a_gpu_is_present(tmp_path: Path) -> None:
+    calls = []
+
+    def torch_state():
+        calls.append(1)
+        return True, True, "should not be asked"
+
+    runtime = probe_runtime(
+        tmp_path,
+        gpu=BIG_GPU,
+        torch_state=torch_state,
+        check_torch=False,
+    )
+    assert runtime.gpu_ok
+    assert not runtime.ready
+    assert calls == []
+    assert "deferred" in runtime.torch_detail
+
+
 def test_probe_on_a_machine_without_gpu_is_off_and_skips_torch(tmp_path: Path) -> None:
     calls = []
 
@@ -252,6 +271,7 @@ def test_session_without_gpu_keeps_neural_voices_disabled(tmp_path: Path) -> Non
     assert session.engine_installed(DSP_ENGINE_ID)
     assert not session.engine_installed(NEURAL_ENGINE_ID)
     assert session.ensure_neural_engine() is None
+    assert session.should_preload_neural() is False
     session.draft.engine_id = NEURAL_ENGINE_ID
     assert session.preview_engine() is session.engine
     session.refresh_neural()
@@ -277,6 +297,7 @@ def test_session_uses_neural_engine_for_neural_drafts_when_ready(
         lambda runtime, block_size=512: NeuralEngine(fake, block_size=block_size),
     )
     assert session.engine_installed(NEURAL_ENGINE_ID)
+    assert session.should_preload_neural()
     clip = tmp_path / "ref.wav"
     write_wav(clip, (0.1 * np.sin(np.arange(48000) / 20.0)).astype(np.float32), 48000)
     session.draft.engine_id = NEURAL_ENGINE_ID

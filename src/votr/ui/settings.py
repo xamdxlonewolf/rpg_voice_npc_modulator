@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import sys
 import threading
 
 from PySide6.QtCore import Qt, QThread, QUrl, Signal
@@ -174,6 +175,8 @@ class SettingsDialog(QDialog):
     def _neural_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
+        if self.session.neural.gpu_ok and not self.session.neural_loading:
+            self.session.refresh_neural()
         runtime = self.session.neural
         self.neural_report = QLabel(neural_status(runtime.gpu, runtime))
         self.neural_report.setWordWrap(True)
@@ -328,6 +331,23 @@ class SettingsDialog(QDialog):
         layout = QVBoxLayout(page)
         layout.addWidget(QLabel(f"{WINDOW_TITLE} {__version__}"))
         layout.addWidget(QLabel("Licensed under GNU GPL-3.0-or-later."))
+        if getattr(sys, "frozen", False):
+            ship = (
+                "This installed copy is the DSP app (Voices, Preview, Roleplay). "
+                "CUDA / X-VC are not inside the installer. Neural still needs a "
+                "source checkout: pip install -e \".[neural]\", then the opt-in "
+                "packs on the Neural tab. See docs/neural-voice.md."
+            )
+        else:
+            ship = (
+                "The Windows installer ships DSP only. Neural needs this source "
+                "tree, pip install -e \".[neural]\", and the opt-in packs on the "
+                "Neural tab."
+            )
+        ship_label = QLabel(ship)
+        ship_label.setWordWrap(True)
+        ship_label.setObjectName("about_install_note")
+        layout.addWidget(ship_label)
         notices = notices_path()
         license_file = license_path()
         if notices is not None:

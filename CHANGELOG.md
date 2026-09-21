@@ -5,6 +5,16 @@ Windows installer artifacts are attached to GitHub Releases on `v*` tags.
 
 ## Unreleased
 
+- Launch: when Neural is enabled (GPU + X-VC pack, or a saved Neural Voice),
+  the app paints first, then loads X-VC on a worker thread under a
+  **Loading Neural Engine…** spinner so Windows does not sit Not Responding.
+  DSP-only launches skip that load and do not import torch at startup.
+
+- Windows installer is a usable DSP install: Voices, Preview, Roleplay from
+  the Start Menu shortcut, no git clone. CUDA / X-VC stay out of the frozen
+  folder (documented extra). See `docs/install-windows.md` and
+  `installer/what-this-installs.txt`.
+
 - Record what's playing: WASAPI/ctypes now uses one cached GUID type for
   Activate, GetService, and device names — fixes
   ``GUID instance instead of gUID instance`` on Windows. Still never falls

@@ -59,6 +59,10 @@ def test_settings_dialog_has_about_and_latency(tmp_path: Path) -> None:
     assert "First-run setup…" in names
     dialog._save()
     assert session.settings.panic_hotkey
+    about = dialog.findChild(type(dialog.neural_report), "about_install_note")
+    assert about is not None
+    assert "DSP" in about.text()
+    assert "[neural]" in about.text()
 
 
 @pytest.mark.skipif(not stretch_available(), reason="DSP Engine needs python-stretch")

@@ -10,10 +10,12 @@ installer-folder size and cold-start to the empty window on Windows 10/11.
 
 Helpers:
 
-- `packaging/VoiceOfTheRealm.spec`
+- `packaging/VoiceOfTheRealm.spec` (DSP onedir; torch / X-VC excluded)
 - `python scripts/build_bundle.py`
 - `python scripts/smoke_headless.py` (and `--frozen` after a build)
 - `installer/votr.iss` (per-user Inno Setup; version from `pyproject.toml`)
+- `installer/what-this-installs.txt` (shown before files copy; DSP vs Neural)
+- `docs/install-windows.md` (what the installer contains; Neural extra)
 
 ## Linux cloud VM (honest, not a Windows result)
 

@@ -7,7 +7,9 @@ Product decisions live in [`docs/`](docs/project-context.md). The app is GPL-3.0
 see [`LICENSE`](LICENSE) and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 Windows packaging lives in `packaging/VoiceOfTheRealm.spec` and
 `installer/votr.iss`. The installer is built on a `v*` tag (GitHub Actions,
-`windows-latest`). Virtual Cable drivers are never bundled.
+`windows-latest`) and ships the **DSP** app only (Voices, Preview, Roleplay).
+CUDA / X-VC are not in that exe — see [`docs/install-windows.md`](docs/install-windows.md).
+Virtual Cable drivers are never bundled.
 
 ## Requirements
 
@@ -25,8 +27,11 @@ python -m votr
 That opens the **Voice of the Realm** window. In the editor, "Use preset" loads a
 named starting point and "Design from Tone Hints" turns a description like *a
 gravelly old dwarf in a great hall* into Tone Tags and sliders — offline, CPU-only.
-What neural voice work is and is not feasible locally is in
-[`docs/neural-voice.md`](docs/neural-voice.md).
+
+**Windows users who only need DSP** should prefer the GitHub Release installer
+over cloning this repo. Neural still needs the venv extra above plus
+`pip install -e ".[neural]"` — [`docs/install-windows.md`](docs/install-windows.md)
+and [`docs/neural-voice.md`](docs/neural-voice.md).
 
 ## Tests and lint
 

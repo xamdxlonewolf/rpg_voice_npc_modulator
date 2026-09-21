@@ -1,0 +1,35 @@
+Voice of the Realm — what this installer includes
+
+This installer puts the DSP app on your Windows PC. You do not need git
+or Python for the core Game Master loop:
+
+  • Voice Library, Voice editor, Tone Tags, Presets
+  • Delayed Preview (record a Take, hear it on your speakers)
+  • Roleplay Mode into a Virtual Cable (Discord)
+
+It does NOT include:
+
+  • CUDA, PyTorch, or the Neural Engine (X-VC)
+  • Model packs (several gigabytes)
+  • Virtual Cable drivers (ADR-0006 — the in-app Discord wizard links
+    to VB-CABLE; the app never bundles those drivers)
+
+Neural Engine (optional, NVIDIA GPU ≥ 6 GiB)
+-------------------------------------------
+CUDA and X-VC cannot honestly ship inside this small frozen install.
+If you want Neural Voices, keep a source checkout and install the extra:
+
+  python -m venv .venv
+  .venv\Scripts\activate
+  pip install -e ".[dev]"
+  pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu128
+  pip install -e ".[neural]"
+  python -m votr
+
+Then Settings → Neural → read the licences → Download the packs.
+
+The installed DSP app and the source Neural venv are separate. Opening
+the Start Menu shortcut will not load X-VC.
+
+Licences: GNU GPL-3.0-or-later. Third-party notices are shown after
+setup and installed next to the app.

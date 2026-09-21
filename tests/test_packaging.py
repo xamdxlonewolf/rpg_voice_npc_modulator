@@ -20,11 +20,20 @@ def test_version_matches_pyproject() -> None:
 
 def test_inno_is_per_user_and_shows_gpl() -> None:
     text = (ROOT / "installer" / "votr.iss").read_text(encoding="utf-8")
+    honesty = (ROOT / "installer" / "what-this-installs.txt").read_text(
+        encoding="utf-8"
+    )
     assert "PrivilegesRequired=lowest" in text
     assert "LicenseFile=..\\LICENSE" in text or "LicenseFile=../LICENSE" in text
     assert "THIRD_PARTY_NOTICES.md" in text
     assert "VB-CABLE" in text or "Virtual Cable" in text
     assert "{userprograms}" in text or "{group}" in text
+    assert "InfoBeforeFile=what-this-installs.txt" in text
+    assert "what-this-installs.txt" in text
+    assert "DSP" in honesty
+    assert "Neural" in honesty
+    assert "CUDA" in honesty or "X-VC" in honesty
+    assert "Start Menu" in honesty or "frozen" in honesty.lower()
 
 
 def test_spec_is_onedir_without_collect_all() -> None:
@@ -35,6 +44,9 @@ def test_spec_is_onedir_without_collect_all() -> None:
     assert "votr/assets" in spec
     assert "sounddevice" in spec
     assert "pedalboard" in spec
+    assert '"torch"' in spec
+    assert "qwen_tts" in spec
+    assert "what-this-installs.txt" in spec
 
 
 def test_release_workflow_is_tag_triggered() -> None:
@@ -70,3 +82,8 @@ def test_changelog_mentions_installer() -> None:
     text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     assert "0.1.0" in text
     assert "Inno" in text or "installer" in text.lower()
+    assert "Loading Neural Engine" in text
+    install = (ROOT / "docs" / "install-windows.md").read_text(encoding="utf-8")
+    assert "DSP" in install
+    assert "[neural]" in install
+    assert "Start Menu" in install

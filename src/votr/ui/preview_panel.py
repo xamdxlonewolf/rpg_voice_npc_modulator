@@ -166,6 +166,12 @@ class PreviewPanel(QWidget):
         else:
             saved = None
             self.session.apply_draft_to_engine()
+            if (
+                self.session.draft.engine_id == NEURAL_ENGINE_ID
+                and self.session.neural_loading
+            ):
+                self.status.setText("Loading Neural Engine…")
+                return
             engine = self.session.preview_engine()
         rendered = take.copy() if self._compare_dry else render_take(engine, take)
         if saved is not None:
@@ -181,6 +187,9 @@ class PreviewPanel(QWidget):
         if voice is None:
             return
         if voice.engine_id == NEURAL_ENGINE_ID:
+            if self.session.neural_loading:
+                self.status.setText("Loading Neural Engine…")
+                return
             engine = self.session.ensure_neural_engine()
             if engine is None:
                 self.status.setText("Neural Voice — the Neural Engine is not ready.")
