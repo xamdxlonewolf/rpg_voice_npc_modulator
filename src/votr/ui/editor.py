@@ -197,7 +197,9 @@ class VoiceEditor(QWidget):
         self.engine_status.setVisible(neural)
         if neural:
             self.mimic.refresh()
-            if self.session.neural_error:
+            if self.session.neural_loading:
+                state = "Loading Neural Engine…"
+            elif self.session.neural_error:
                 state = self.session.neural_error
             elif self.session.engine_installed(NEURAL_ENGINE_ID):
                 state = "Neural Engine ready — Preview converts your Take."

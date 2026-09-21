@@ -5,7 +5,11 @@
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+)
 
 ROOT = Path(SPECPATH).resolve().parent
 
@@ -13,6 +17,7 @@ datas = [
     (str(ROOT / "src" / "votr" / "assets"), "votr/assets"),
     (str(ROOT / "THIRD_PARTY_NOTICES.md"), "."),
     (str(ROOT / "LICENSE"), "."),
+    (str(ROOT / "installer" / "what-this-installs.txt"), "."),
 ]
 binaries = []
 hiddenimports = [
@@ -28,8 +33,12 @@ hiddenimports = [
     "votr.app",
     "votr.assets",
 ]
+try:
+    hiddenimports += collect_submodules("votr")
+except Exception:
+    pass
 
-for package in ("sounddevice", "pedalboard", "python_stretch", "PySide6"):
+for package in ("sounddevice", "pedalboard", "python_stretch"):
     try:
         datas += collect_data_files(package)
     except Exception:
@@ -69,7 +78,21 @@ a = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[str(ROOT / "packaging" / "rthooks" / "pyi_rth_votr.py")],
-    excludes=["tkinter", "matplotlib", "PySide6.QtCharts"],
+    # DSP installer only. Never pull CUDA / X-VC into the frozen folder.
+    excludes=[
+        "tkinter",
+        "matplotlib",
+        "PySide6.QtCharts",
+        "torch",
+        "torchaudio",
+        "transformers",
+        "wandb",
+        "tensorboard",
+        "hydra",
+        "omegaconf",
+        "qwen_tts",
+        "librosa",
+    ],
     noarchive=False,
 )
 

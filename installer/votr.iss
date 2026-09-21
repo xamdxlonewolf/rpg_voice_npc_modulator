@@ -23,6 +23,7 @@ DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 LicenseFile=..\LICENSE
+InfoBeforeFile=what-this-installs.txt
 InfoAfterFile=..\THIRD_PARTY_NOTICES.md
 OutputDir=output
 OutputBaseFilename=VoiceOfTheRealm-{#MyAppVersion}-setup
@@ -43,6 +44,7 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 Source: "..\dist\VoiceOfTheRealm\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "what-this-installs.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

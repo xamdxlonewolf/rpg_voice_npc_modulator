@@ -14,6 +14,7 @@ from votr.session import Session
 from votr.ui.editor import VoiceEditor
 from votr.ui.first_run import FirstRunWizard
 from votr.ui.library import VoiceLibrary
+from votr.ui.neural_preload import NeuralLoadOverlay, NeuralLoadWorker
 from votr.ui.roleplay_panel import RoleplayPanel
 from votr.ui.settings import SettingsDialog
 from votr.ui.wizard import DiscordWizard
@@ -59,6 +60,8 @@ class MainWindow(QMainWindow):
         )
         self.panic_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
         self.panic_shortcut.activated.connect(self.roleplay.toggle_panic)
+        self._neural_overlay: NeuralLoadOverlay | None = None
+        self._neural_worker: NeuralLoadWorker | None = None
         self.refresh_chrome()
 
     def refresh_chrome(self) -> None:
@@ -107,6 +110,52 @@ class MainWindow(QMainWindow):
         dialog.exec()
         self.panic_shortcut.setKey(QKeySequence(self.session.settings.panic_hotkey))
         self.roleplay.refresh()
+
+    def start_neural_preload(self) -> NeuralLoadWorker | None:
+        """Show the spinner and load X-VC after first paint. DSP-only skips."""
+        if self._neural_worker is not None and self._neural_worker.isRunning():
+            return self._neural_worker
+        if not self.session.should_preload_neural():
+            return None
+        host = self.centralWidget() or self
+        overlay = NeuralLoadOverlay(host)
+        overlay.setGeometry(host.rect())
+        overlay.show()
+        overlay.raise_()
+        worker = NeuralLoadWorker(self.session, self)
+        worker.finished_ok.connect(self._on_neural_preload_done)
+        worker.failed.connect(self._on_neural_preload_failed)
+        self._neural_overlay = overlay
+        self._neural_worker = worker
+        worker.start()
+        return worker
+
+    def _place_neural_overlay(self) -> None:
+        overlay = self._neural_overlay
+        if overlay is None:
+            return
+        host = overlay.parentWidget()
+        overlay.setGeometry(host.rect() if host is not None else self.rect())
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 — Qt
+        super().resizeEvent(event)
+        self._place_neural_overlay()
+
+    def _clear_neural_overlay(self) -> None:
+        overlay = self._neural_overlay
+        self._neural_overlay = None
+        if overlay is not None:
+            overlay.hide()
+            overlay.deleteLater()
+        self.library.refresh()
+        self.editor.reload_from_draft()
+        self.refresh_chrome()
+
+    def _on_neural_preload_done(self) -> None:
+        self._clear_neural_overlay()
+
+    def _on_neural_preload_failed(self, _message: str) -> None:
+        self._clear_neural_overlay()
 
     def closeEvent(self, event) -> None:  # noqa: N802 — Qt
         if self.editor.confirm_discard():

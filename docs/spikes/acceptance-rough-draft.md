@@ -8,7 +8,9 @@ the cable from the vendor; the app never bundles it).
 
 ## Checklist (from `docs/backlog.md` definition of done)
 
-1. [ ] Install Voice of the Realm from the Inno Setup per-user installer.
+1. [ ] Install Voice of the Realm from the Inno Setup per-user installer
+      (Start Menu shortcut; no `git clone`). Confirm the wizard said this is
+      the DSP app and that Neural is a separate source/`[neural]` extra.
 2. [ ] First-run setup completes (or is skipped and re-run from Settings).
 3. [ ] Devices: mic and speakers picked; Virtual Cable detected.
 4. [ ] Latency Test reports a method. If glass-to-glass cannot run, the UI

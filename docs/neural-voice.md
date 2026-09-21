@@ -117,7 +117,9 @@ own adapter.
 
 ## Installing the runtime (learned on Michael's Windows box, Python 3.13)
 
-Run from source, not the installer. In the repo folder:
+The Windows installer is **DSP only**. CUDA / X-VC cannot ship inside that
+frozen folder. Run Neural from source, not from the Start Menu shortcut. In
+the repo folder:
 
 ```powershell
 python -m venv .venv
@@ -165,7 +167,8 @@ pins (torch 2.5.1 / transformers 4.44.1) are not needed.
 ## Remaining
 
 1. **Roleplay Mode** still uses the DSP Engine for Neural Voices (S7.4 next slice).
-2. **Installer** does not carry the runtime; source checkout required.
+2. **Installer** is the DSP `--onedir` + Inno Setup path (`docs/install-windows.md`).
+   Neural still needs this checkout, `pip install -e ".[neural]"`, and the packs.
 3. **Quality and latency numbers** are the publishers'; nothing measured here yet.
 4. `descript-audiotools` stays out of the `neural` extra (protobuf conflict); a stand-in
    module covers X-VC's import. Training X-VC would need it in its own environment.

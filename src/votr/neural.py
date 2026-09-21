@@ -161,18 +161,33 @@ def probe_runtime(
     gpu: GpuInfo | None = None,
     detect: Callable[[], GpuInfo | None] = detect_nvidia_gpu,
     torch_state: Callable[[], tuple[bool, bool, str]] = torch_cuda_state,
+    check_torch: bool | None = None,
 ) -> NeuralRuntime:
+    """Probe GPU, packs, and optionally PyTorch.
+
+    ``check_torch=False`` skips importing torch (startup must not block first
+    paint). The default still checks torch when an NVIDIA GPU is present so
+    Settings and tests stay honest.
+    """
     root = pack_root(Path(data_dir))
     found = gpu if gpu is not None else detect()
-    torch_ok, cuda_ok, detail = (
-        torch_state()
-        if found is not None
-        else (
-            False,
-            False,
-            "not checked (no NVIDIA GPU)",
-        )
-    )
+    if check_torch is False:
+        if found is None:
+            torch_ok, cuda_ok, detail = (
+                False,
+                False,
+                "not checked (no NVIDIA GPU)",
+            )
+        else:
+            torch_ok, cuda_ok, detail = (
+                False,
+                False,
+                "not checked (deferred until Neural load)",
+            )
+    elif found is not None or check_torch is True:
+        torch_ok, cuda_ok, detail = torch_state()
+    else:
+        torch_ok, cuda_ok, detail = False, False, "not checked (no NVIDIA GPU)"
     return NeuralRuntime(
         gpu=found,
         torch_ok=torch_ok,

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 
 from votr.clips import REFERENCE_CLIP_ID_KEY, Clip, ClipLibrary
@@ -47,9 +48,15 @@ class Session:
         block = self.settings.block_size or None
         self.engine = DspEngine(macros=self.macros, block_size=block)
         self.path = RoleplayPath(self.engine, self.settings)
-        self.neural: NeuralRuntime = probe_runtime(self.store.root.parent)
+        # Skip importing torch here — that can stall first paint on GPU boxes.
+        self.neural: NeuralRuntime = probe_runtime(
+            self.store.root.parent, check_torch=False
+        )
         self.neural_engine: NeuralEngine | None = None
         self.neural_error = ""
+        self._neural_lock = threading.Lock()
+        self._neural_loading = False
+        self._neural_preload_active = False
         self.voices = self.store.load_all()
         self.warnings = list(self.store.warnings)
         self.draft = Voice.new()
@@ -67,6 +74,26 @@ class Session:
             return self.neural.ready
         return engine_id in INSTALLED_ENGINE_IDS
 
+    @property
+    def neural_loading(self) -> bool:
+        return self._neural_preload_active or self._neural_loading
+
+    def begin_neural_preload(self) -> None:
+        """Mark the launch X-VC load (includes the deferred torch probe)."""
+        self._neural_preload_active = True
+
+    def end_neural_preload(self) -> None:
+        self._neural_preload_active = False
+
+    def should_preload_neural(self) -> bool:
+        """True when X-VC should load at launch (DSP-only users skip this)."""
+        if self.neural_engine is not None:
+            return False
+        if not self.neural.conversion.installed:
+            return False
+        has_voice = any(voice.engine_id == NEURAL_ENGINE_ID for voice in self.voices)
+        return bool(self.neural.gpu_ok or self.neural.ready or has_voice)
+
     def refresh_neural(self) -> None:
         """Re-probe after a pack download; drops a stale Engine instance."""
         self.neural = probe_runtime(self.store.root.parent, gpu=self.neural.gpu)
@@ -74,9 +101,24 @@ class Session:
         if not self.neural.ready:
             self.neural_engine = None
 
-    def ensure_neural_engine(self) -> NeuralEngine | None:
-        """Load the Neural Engine on first use (it is a multi-GB model)."""
-        if self.neural_engine is None and self.neural.ready and not self.neural_error:
+    def ensure_neural_engine(self, *, from_loader: bool = False) -> NeuralEngine | None:
+        """Load the Neural Engine on first use (it is a multi-GB model).
+
+        The UI thread must pass the default so a launch preload cannot freeze
+        Preview. The background loader uses ``from_loader=True``.
+        """
+        if self.neural_engine is not None:
+            return self.neural_engine
+        if self.neural_loading and not from_loader:
+            return None
+        if not self._neural_lock.acquire(blocking=False):
+            return None
+        try:
+            if self.neural_engine is not None:
+                return self.neural_engine
+            if not self.neural.ready or self.neural_error:
+                return None
+            self._neural_loading = True
             try:
                 self.neural_engine = build_neural_engine(
                     self.neural, block_size=self.engine.block_size
@@ -84,7 +126,11 @@ class Session:
             except NeuralUnavailable as exc:
                 self.neural_error = f"Neural Engine failed to start: {exc}"
                 log.warning(self.neural_error)
-        return self.neural_engine
+            finally:
+                self._neural_loading = False
+            return self.neural_engine
+        finally:
+            self._neural_lock.release()
 
     def preview_engine(self):
         """Engine Preview should render the draft with (Neural Voice → Neural)."""
