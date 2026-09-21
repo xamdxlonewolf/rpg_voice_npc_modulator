@@ -9,9 +9,10 @@ loop once a `v*` GitHub Release has an installer attached.
 The Inno Setup per-user installer (`VoiceOfTheRealm-<version>-setup.exe`)
 copies the PyInstaller `--onedir` folder:
 
-- `VoiceOfTheRealm.exe` plus the DSP runtime (PySide6, NumPy, Pedalboard,
-  `python-stretch`, PortAudio via sounddevice, bundled `macros.json` /
-  `presets.json` / `sample_take.wav`)
+- `VoiceOfTheRealm.exe` plus the DSP runtime (PySide6 widgets, NumPy,
+  Pedalboard, `python-stretch`, PortAudio via sounddevice, bundled
+  `macros.json` / `presets.json` / `sample_take.wav`). Linux smoke of this
+  spec was 239 MB onedir — that is **not** a Windows size.
 - `LICENSE` (GPL-3.0-or-later) and `THIRD_PARTY_NOTICES.md`
 - `what-this-installs.txt` (the same honesty page the wizard shows first)
 

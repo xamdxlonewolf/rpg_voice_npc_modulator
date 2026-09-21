@@ -15,18 +15,25 @@ def bundle_or_repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def _search_roots() -> list[Path]:
+    roots = [bundle_or_repo_root(), Path(__file__).resolve().parent]
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        roots.append(Path(meipass))
+    return roots
+
+
 def notices_path() -> Path | None:
-    names = ("THIRD_PARTY_NOTICES.md", "LICENSE")
-    root = bundle_or_repo_root()
-    here = Path(__file__).resolve().parent
-    for base in (root, here, here.parent):
-        notice = base / names[0]
+    for base in _search_roots():
+        notice = base / "THIRD_PARTY_NOTICES.md"
         if notice.is_file():
             return notice
     return None
 
 
 def license_path() -> Path | None:
-    root = bundle_or_repo_root()
-    path = root / "LICENSE"
-    return path if path.is_file() else None
+    for base in _search_roots():
+        path = base / "LICENSE"
+        if path.is_file():
+            return path
+    return None

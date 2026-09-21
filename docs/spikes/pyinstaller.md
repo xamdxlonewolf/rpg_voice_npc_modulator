@@ -19,12 +19,22 @@ Helpers:
 
 ## Linux cloud VM (honest, not a Windows result)
 
-An earlier `PyInstaller --collect-all PySide6` smoke on this VM produced
-`dist/VoiceOfTheRealm` at **722 MB**. That figure is **Linux-only** and is
-why the E6 spec does **not** use `--collect-all PySide6`.
+Re-run 2026-09-21 on this VM (`python scripts/build_bundle.py` then
+`python scripts/smoke_headless.py --frozen`):
 
-Do **not** copy 722 MB or the old 0.19 s `--headless` time into a Windows
-estimate. Windows bundle size and cold-start have not been measured.
+- `dist/VoiceOfTheRealm` **239 MB** onedir (PySide6 hooks only — not
+  `--collect-all`, and not `collect_data_files("PySide6")` of the whole
+  package). An earlier collect-all smoke on this VM was 722 MB; a mistaken
+  full-package collect in this branch first landed at 756 MB before the
+  spec was tightened.
+- Frozen `--headless` **exit 0**. No `torch` / X-VC / qwen in the tree.
+- `sounddevice` warned that PortAudio was missing here; that is Linux-VM
+  only. Windows GHA / Michael's box should pick up the PortAudio DLL.
+- `LICENSE`, notices, and `what-this-installs.txt` land in `_internal/`;
+  Inno also copies them next to the exe.
+
+Do **not** copy 239 MB, 722 MB, or 756 MB into a Windows estimate.
+Windows bundle size and cold-start have not been measured.
 
 - `rubband` has **no published Windows wheel**; the first Windows installer
   should ship `python-stretch` and collect Rubber Band only if a wheel or

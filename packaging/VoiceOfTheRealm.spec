@@ -38,7 +38,7 @@ try:
 except Exception:
     pass
 
-for package in ("sounddevice", "pedalboard", "python_stretch", "PySide6"):
+for package in ("sounddevice", "pedalboard", "python_stretch"):
     try:
         datas += collect_data_files(package)
     except Exception:

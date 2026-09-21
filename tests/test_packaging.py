@@ -44,6 +44,8 @@ def test_spec_is_onedir_without_collect_all() -> None:
     assert "votr/assets" in spec
     assert "sounddevice" in spec
     assert "pedalboard" in spec
+    assert "python_stretch" in spec
+    assert 'for package in ("sounddevice", "pedalboard", "python_stretch")' in spec
     assert '"torch"' in spec
     assert "qwen_tts" in spec
     assert "what-this-installs.txt" in spec
@@ -76,6 +78,16 @@ def test_stamp_inno_version(tmp_path: Path, monkeypatch) -> None:
     assert 'MyAppVersion "0.1.0"' in (tmp_path / "version.iss").read_text(
         encoding="utf-8"
     )
+
+
+def test_frozen_search_roots_include_meipass(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from votr import paths
+
+    monkeypatch.setattr(paths.sys, "_MEIPASS", str(tmp_path), raising=False)
+    roots = [Path(item) for item in paths._search_roots()]
+    assert tmp_path in roots
 
 
 def test_changelog_mentions_installer() -> None:
