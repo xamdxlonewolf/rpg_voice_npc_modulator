@@ -5,6 +5,11 @@ Windows installer artifacts are attached to GitHub Releases on `v*` tags.
 
 ## Unreleased
 
+- Record what's playing: WASAPI/ctypes now uses one cached GUID type for
+  Activate, GetService, and device names — fixes
+  ``GUID instance instead of gUID instance`` on Windows. Still never falls
+  back to the microphone.
+
 - Mimic clip panel: **Record what's playing** captures the video's audio from
   the Windows playback device (WASAPI loopback / default output), not the
   microphone. Same 30 s cap, countdown, name/save/use, Play, and level

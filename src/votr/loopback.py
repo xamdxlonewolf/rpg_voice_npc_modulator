@@ -402,25 +402,88 @@ def _com_ok(hr: int, what: str) -> None:
     raise LoopbackError(f"{what} failed (HRESULT 0x{unsigned:08X}).")
 
 
-def _guid_type(ctypes: Any) -> Any:
-    class GUID(ctypes.Structure):
-        _fields_ = [
-            ("Data1", ctypes.c_uint32),
-            ("Data2", ctypes.c_uint16),
-            ("Data3", ctypes.c_uint16),
-            ("Data4", ctypes.c_ubyte * 8),
-        ]
+class _WasapiTypes:
+    """One GUID / WAVEFORMATEX / PROPERTYKEY family per ctypes module.
 
-    return GUID
+    ctypes treats two Structure classes with the same fields as different
+    types. Building a new ``class GUID`` on every call produced Michael's
+    ``GUID instance instead of gUID instance`` on Activate / PKEY.
+    """
+
+    def __init__(self, ctypes: Any) -> None:
+        class GUID(ctypes.Structure):
+            _fields_ = [
+                ("Data1", ctypes.c_uint32),
+                ("Data2", ctypes.c_uint16),
+                ("Data3", ctypes.c_uint16),
+                ("Data4", ctypes.c_ubyte * 8),
+            ]
+
+        class WAVEFORMATEX(ctypes.Structure):
+            _fields_ = [
+                ("wFormatTag", ctypes.c_uint16),
+                ("nChannels", ctypes.c_uint16),
+                ("nSamplesPerSec", ctypes.c_uint32),
+                ("nAvgBytesPerSec", ctypes.c_uint32),
+                ("nBlockAlign", ctypes.c_uint16),
+                ("wBitsPerSample", ctypes.c_uint16),
+                ("cbSize", ctypes.c_uint16),
+            ]
+
+        class PROPERTYKEY(ctypes.Structure):
+            _fields_ = [("fmtid", GUID), ("pid", ctypes.c_uint32)]
+
+        class PROPVARIANT(ctypes.Structure):
+            _fields_ = [
+                ("vt", ctypes.c_uint16),
+                ("wReserved1", ctypes.c_uint16),
+                ("wReserved2", ctypes.c_uint16),
+                ("wReserved3", ctypes.c_uint16),
+                ("data", ctypes.c_void_p),
+            ]
+
+        self.GUID = GUID
+        self.WAVEFORMATEX = WAVEFORMATEX
+        self.PROPERTYKEY = PROPERTYKEY
+        self.PROPVARIANT = PROPVARIANT
 
 
-def _guid(ctypes: Any, ole32: Any, text: str) -> Any:
-    guid_cls = _guid_type(ctypes)
-    guid = guid_cls()
-    ole32.IIDFromString.argtypes = [ctypes.c_wchar_p, ctypes.POINTER(guid_cls)]
-    ole32.IIDFromString.restype = ctypes.HRESULT
-    _com_ok(ole32.IIDFromString(text, ctypes.byref(guid)), "IIDFromString")
-    return guid
+_WASAPI_TYPES: dict[int, _WasapiTypes] = {}
+
+
+def _wasapi_types(ctypes: Any) -> _WasapiTypes:
+    key = id(ctypes)
+    cached = _WASAPI_TYPES.get(key)
+    if cached is None:
+        cached = _WasapiTypes(ctypes)
+        _WASAPI_TYPES[key] = cached
+    return cached
+
+
+def _parse_guid(ctypes: Any, text: str) -> Any:
+    """Fill the cached GUID class from a ``{xxxxxxxx-....}`` string.
+
+    Parsed in Python so we never fight ``ole32.IIDFromString.argtypes``
+    (comtypes / PortAudio may have prototyped that as a different GUID).
+    """
+    return _fill_guid(_wasapi_types(ctypes).GUID, text)
+
+
+def _fill_guid(guid_cls: Any, text: str) -> Any:
+    raw = text.strip().strip("{}").replace("-", "")
+    if len(raw) != 32:
+        raise LoopbackError(f"Invalid GUID {text!r}")
+    data4_type = guid_cls._fields_[3][1]
+    return guid_cls(
+        int(raw[0:8], 16),
+        int(raw[8:12], 16),
+        int(raw[12:16], 16),
+        data4_type.from_buffer_copy(bytes.fromhex(raw[16:32])),
+    )
+
+
+def _iid_p(ctypes: Any) -> Any:
+    return ctypes.POINTER(_wasapi_types(ctypes).GUID)
 
 
 def _as_void(ctypes: Any, obj: Any) -> Any:
@@ -587,12 +650,22 @@ def _init_com(ctypes: Any, ole32: Any) -> None:
 
 
 def _create_enumerator(ctypes: Any, ole32: Any) -> Any:
-    clsid = _guid(ctypes, ole32, _CLSID_MMDEV)
-    iid = _guid(ctypes, ole32, _IID_ENUM)
+    types = _wasapi_types(ctypes)
+    clsid = _parse_guid(ctypes, _CLSID_MMDEV)
+    iid = _parse_guid(ctypes, _IID_ENUM)
     ptr = ctypes.c_void_p()
-    ole32.CoCreateInstance.restype = ctypes.HRESULT
+    # Own prototype: do not mutate ole32.CoCreateInstance.argtypes (comtypes
+    # may have bound a different GUID class there).
+    create = ctypes.WINFUNCTYPE(
+        ctypes.HRESULT,
+        ctypes.POINTER(types.GUID),
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+        ctypes.POINTER(types.GUID),
+        ctypes.POINTER(ctypes.c_void_p),
+    )(("CoCreateInstance", ole32))
     _com_ok(
-        ole32.CoCreateInstance(
+        create(
             ctypes.byref(clsid),
             None,
             _CLSCTX_ALL,
@@ -681,30 +754,18 @@ def _device_friendly_name(ctypes: Any, ole32: Any, device: Any) -> str:
         ctypes.POINTER(ctypes.c_void_p),
     )
     _com_ok(open_store(_STGM_READ, ctypes.byref(store)), "OpenPropertyStore")
-    guid_cls = _guid_type(ctypes)
-
-    class PKEY(ctypes.Structure):
-        _fields_ = [("fmtid", guid_cls), ("pid", ctypes.c_uint32)]
-
-    class PROPVARIANT(ctypes.Structure):
-        _fields_ = [
-            ("vt", ctypes.c_uint16),
-            ("wReserved1", ctypes.c_uint16),
-            ("wReserved2", ctypes.c_uint16),
-            ("wReserved3", ctypes.c_uint16),
-            ("data", ctypes.c_void_p),
-        ]
+    types = _wasapi_types(ctypes)
 
     try:
-        key = PKEY(_guid(ctypes, ole32, _PKEY_NAME), 14)
-        value = PROPVARIANT()
+        key = types.PROPERTYKEY(_parse_guid(ctypes, _PKEY_NAME), 14)
+        value = types.PROPVARIANT()
         get_value = _vtable(
             ctypes,
             store.value,
             5,
             ctypes.HRESULT,
-            ctypes.POINTER(PKEY),
-            ctypes.POINTER(PROPVARIANT),
+            ctypes.POINTER(types.PROPERTYKEY),
+            ctypes.POINTER(types.PROPVARIANT),
         )
         _com_ok(get_value(ctypes.byref(key), ctypes.byref(value)), "GetValue")
         try:
@@ -712,39 +773,26 @@ def _device_friendly_name(ctypes: Any, ole32: Any, device: Any) -> str:
                 return ""
             return ctypes.wstring_at(value.data)
         finally:
-            ole32.PropVariantClear.argtypes = [ctypes.POINTER(PROPVARIANT)]
-            ole32.PropVariantClear(ctypes.byref(value))
+            clear = ctypes.WINFUNCTYPE(
+                ctypes.HRESULT, ctypes.POINTER(types.PROPVARIANT)
+            )(("PropVariantClear", ole32))
+            clear(ctypes.byref(value))
     finally:
         _release(ctypes, store.value)
-
-
-def _waveformat_type(ctypes: Any) -> Any:
-    class WAVEFORMATEX(ctypes.Structure):
-        _fields_ = [
-            ("wFormatTag", ctypes.c_uint16),
-            ("nChannels", ctypes.c_uint16),
-            ("nSamplesPerSec", ctypes.c_uint32),
-            ("nAvgBytesPerSec", ctypes.c_uint32),
-            ("nBlockAlign", ctypes.c_uint16),
-            ("wBitsPerSample", ctypes.c_uint16),
-            ("cbSize", ctypes.c_uint16),
-        ]
-
-    return WAVEFORMATEX
 
 
 def _init_loopback_client(
     ctypes: Any, ole32: Any, device: Any
 ) -> tuple[Any, Any, int, int, bool, int]:
-    wave_cls = _waveformat_type(ctypes)
-    iid_client = _guid(ctypes, ole32, _IID_CLIENT)
+    types = _wasapi_types(ctypes)
+    iid_client = _parse_guid(ctypes, _IID_CLIENT)
     client = ctypes.c_void_p()
     activate = _vtable(
         ctypes,
         device,
         3,
         ctypes.HRESULT,
-        ctypes.c_void_p,
+        _iid_p(ctypes),
         ctypes.c_uint32,
         ctypes.c_void_p,
         ctypes.POINTER(ctypes.c_void_p),
@@ -753,13 +801,13 @@ def _init_loopback_client(
         activate(ctypes.byref(iid_client), _CLSCTX_ALL, None, ctypes.byref(client)),
         "IMMDevice.Activate(IAudioClient)",
     )
-    mix_ptr = ctypes.POINTER(wave_cls)()
+    mix_ptr = ctypes.POINTER(types.WAVEFORMATEX)()
     get_mix = _vtable(
         ctypes,
         client.value,
         8,
         ctypes.HRESULT,
-        ctypes.POINTER(ctypes.POINTER(wave_cls)),
+        ctypes.POINTER(ctypes.POINTER(types.WAVEFORMATEX)),
     )
     _com_ok(get_mix(ctypes.byref(mix_ptr)), "GetMixFormat")
     mix = mix_ptr.contents
@@ -781,7 +829,7 @@ def _init_loopback_client(
         ctypes.c_uint32,
         ctypes.c_int64,
         ctypes.c_int64,
-        ctypes.POINTER(wave_cls),
+        ctypes.POINTER(types.WAVEFORMATEX),
         ctypes.c_void_p,
     )
     hr = initialize(0, flags, _REFTIMES_PER_SEC // 10, 0, mix_ptr, None)
@@ -801,14 +849,14 @@ def _init_loopback_client(
 
 
 def _get_capture_client(ctypes: Any, ole32: Any, client: Any) -> Any:
-    iid = _guid(ctypes, ole32, _IID_CAPTURE)
+    iid = _parse_guid(ctypes, _IID_CAPTURE)
     capture = ctypes.c_void_p()
     get_service = _vtable(
         ctypes,
         client,
         14,
         ctypes.HRESULT,
-        ctypes.c_void_p,
+        _iid_p(ctypes),
         ctypes.POINTER(ctypes.c_void_p),
     )
     _com_ok(
